@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::folder::{normalize_color, Availability, Folder, FolderError, Project};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Persisted application state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,6 +216,30 @@ impl Config {
         }
         self.schema = SCHEMA_VERSION;
 
+        if self.preferences.hotkey.trim().is_empty() {
+            self.preferences.hotkey = default_hotkey();
+            notes.push("restored the default quick-actions shortcut".into());
+        }
+        if self.preferences.projects_hotkey.trim().is_empty() {
+            self.preferences.projects_hotkey = default_projects_hotkey();
+            notes.push("restored the default project-folders shortcut".into());
+        }
+        if self
+            .preferences
+            .hotkey
+            .eq_ignore_ascii_case(&self.preferences.projects_hotkey)
+        {
+            let fallback = if self.preferences.hotkey.eq_ignore_ascii_case("CTRL+ALT+P") {
+                "CTRL+ALT+F"
+            } else {
+                "CTRL+ALT+P"
+            };
+            self.preferences.projects_hotkey = fallback.into();
+            notes.push(format!(
+                "quick actions and project folders shared a shortcut; project folders now use {fallback}"
+            ));
+        }
+
         if self.projects.is_empty() {
             notes.push("no projects found; created a default project".into());
             self.projects.push(Project::new("My Project", "#3b82f6"));
@@ -287,6 +311,9 @@ pub struct Preferences {
     /// XDG shortcut syntax understood by the GlobalShortcuts portal.
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    /// Shortcut that opens the project-folder wheel.
+    #[serde(default = "default_projects_hotkey")]
+    pub projects_hotkey: String,
     #[serde(default = "default_true")]
     pub close_after_launch: bool,
     #[serde(default)]
@@ -302,6 +329,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             hotkey: default_hotkey(),
+            projects_hotkey: default_projects_hotkey(),
             close_after_launch: true,
             launch_at_login: false,
             terminal: None,
@@ -312,6 +340,10 @@ impl Default for Preferences {
 
 fn default_hotkey() -> String {
     "CTRL+ALT+SPACE".into()
+}
+
+fn default_projects_hotkey() -> String {
+    "CTRL+ALT+P".into()
 }
 
 fn default_true() -> bool {
@@ -429,6 +461,34 @@ mod tests {
             Some("#abcdef")
         );
         assert!(config.set_active_project(config.projects[0].id));
+    }
+
+    #[test]
+    fn older_config_gets_project_shortcut_default() {
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        value["schema"] = serde_json::json!(1);
+        value["preferences"]
+            .as_object_mut()
+            .unwrap()
+            .remove("projects_hotkey");
+
+        let mut config: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(config.schema, 1);
+        assert_eq!(config.preferences.projects_hotkey, "CTRL+ALT+P");
+        assert!(config.normalize().is_empty());
+        assert_eq!(config.schema, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn duplicate_shortcuts_are_repaired() {
+        let mut config = Config::default();
+        config.preferences.projects_hotkey = config.preferences.hotkey.clone();
+        let notes = config.normalize();
+        assert!(notes.iter().any(|note| note.contains("shared a shortcut")));
+        assert_ne!(
+            config.preferences.hotkey,
+            config.preferences.projects_hotkey
+        );
     }
 
     #[test]

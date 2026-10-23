@@ -5,6 +5,7 @@ mod autostart;
 mod controller;
 mod hotkey;
 mod launcher;
+mod logging;
 mod manage;
 mod settings;
 mod theme;
@@ -24,6 +25,7 @@ USAGE:
 OPTIONS:
     --hidden          Start in the tray without showing the wheel
     --show            Show the wheel immediately
+    --projects        Open the project-folder wheel immediately
     --manage          Open the folder management window
     --settings        Open the settings window
     --reset-config    Delete the saved configuration, then start with defaults
@@ -34,16 +36,21 @@ FILES are opened in the wheel, e.g. from a file manager service menu.
 
 ENVIRONMENT:
     RUST_LOG          Log filter (e.g. radial_deck=debug)
+
+Logs are written to $XDG_STATE_HOME/radial-deck/logs (7 daily files).
 ";
 
 fn main() -> gtk::glib::ExitCode {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("radial_deck=info,warn")),
-        )
-        .with_writer(std::io::stderr)
-        .try_init();
+    // The UI is small, static 2D; Cairo keeps idle memory far below the GL
+    // renderer and avoids relying on the Optimus GPU. Users can override it.
+    if std::env::var_os("GSK_RENDERER").is_none() {
+        std::env::set_var("GSK_RENDERER", "cairo");
+    }
+
+    let _log_guard = logging::init();
+    if let Some(dir) = logging::log_dir() {
+        tracing::debug!("log directory: {}", dir.display());
+    }
 
     let args: Vec<String> = std::env::args().collect();
     let cli = controller::Cli::parse(args.iter().skip(1).cloned());
