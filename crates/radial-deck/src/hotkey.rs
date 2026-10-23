@@ -143,9 +143,19 @@ async fn run(
                 .shortcuts()
                 .first()
                 .map(|shortcut| shortcut.trigger_description().to_string())
-                .filter(|description| !description.is_empty())
-                .unwrap_or_else(|| preferred.clone());
-            let _ = events.send(HotkeyEvent::Bound(description)).await;
+                .unwrap_or_default();
+            if description.is_empty() {
+                // KDE keeps previously denied bindings around: BindShortcuts
+                // succeeds but without a trigger, so nothing is grabbed.
+                let _ = events
+                    .send(HotkeyEvent::Error(format!(
+                        "no shortcut assigned; use Change Shortcut… to bind {}",
+                        preferred
+                    )))
+                    .await;
+            } else {
+                let _ = events.send(HotkeyEvent::Bound(description)).await;
+            }
         }
         Err(error) => {
             let _ = events
