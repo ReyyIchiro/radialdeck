@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint:
+    name: Lint (fmt + clippy)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install GTK4 + layer-shell build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev libglib2.0-dev libpango1.0-dev libcairo2-dev \
+            libgdk-pixbuf-2.0-dev wayland-protocols libwayland-dev \
+            meson ninja-build valac
+          # build gtk4-layer-shell from source (not in ubuntu 24.04 repos yet)
+          git clone --depth 1 -b v1.3.0 \
+            https://github.com/wmww/gtk4-layer-shell.git /tmp/gtk4-layer-shell
+          cd /tmp/gtk4-layer-shell
+          meson setup --prefix=/usr -Dintrospection=false -Dvapi=false \
+            -Dexamples=false -Ddocs=false -Dtests=false build
+          sudo meson install -C build
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev libglib2.0-dev libpango1.0-dev libcairo2-dev \
+            libgdk-pixbuf-2.0-dev wayland-protocols libwayland-dev \
+            meson ninja-build valac
+          git clone --depth 1 -b v1.3.0 \
+            https://github.com/wmww/gtk4-layer-shell.git /tmp/gtk4-layer-shell
+          cd /tmp/gtk4-layer-shell
+          meson setup --prefix=/usr -Dintrospection=false -Dvapi=false \
+            -Dexamples=false -Ddocs=false -Dtests=false build
+          sudo meson install -C build
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: cargo test
+        run: cargo test --locked --all
+
+  build:
+    name: Build release binary
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev libglib2.0-dev libpango1.0-dev libcairo2-dev \
+            libgdk-pixbuf-2.0-dev wayland-protocols libwayland-dev \
+            meson ninja-build valac
+          git clone --depth 1 -b v1.3.0 \
+            https://github.com/wmww/gtk4-layer-shell.git /tmp/gtk4-layer-shell
+          cd /tmp/gtk4-layer-shell
+          meson setup --prefix=/usr -Dintrospection=false -Dvapi=false \
+            -Dexamples=false -Ddocs=false -Dtests=false build
+          sudo meson install -C build
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: cargo build --release
+        run: cargo build --locked --release
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: radial-deck-linux-x86_64
+          path: target/release/radial-deck
