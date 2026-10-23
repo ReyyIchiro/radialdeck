@@ -165,8 +165,11 @@ fn hit_test(geo: &Geometry, state: &State, x: f64, y: f64) -> Hit {
     }
 
     if distance > geo.inner && distance <= geo.outer && !state.filtered.is_empty() {
-        let angle = (dy.atan2(dx) + FRAC_PI_2).rem_euclid(TAU);
         let step = TAU / state.filtered.len() as f64;
+        // Wedges are centred on the top; shift the pointer angle by half a
+        // step so sector 0 covers the top wedge instead of starting at its
+        // right edge.
+        let angle = (dy.atan2(dx) + FRAC_PI_2 + step / 2.0).rem_euclid(TAU);
         let index = (angle / step).floor() as usize;
         return Hit::Sector(index.min(state.filtered.len() - 1));
     }
@@ -694,29 +697,30 @@ fn draw_single(cr: &gtk::cairo::Context, geo: &Geometry, state: &State, palette:
     } else {
         palette.muted
     };
-    text(
+    let status = if state.query.is_empty() {
+        "Open"
+    } else {
+        "1 match"
+    };
+    text_stack(
         cr,
         geo.cx,
-        geo.cy - 7.0,
-        &folder.label,
-        15.0,
-        (color.0, color.1, color.2, 0.98),
+        geo.cy,
         geo.inner * 1.72,
-        true,
-    );
-    text(
-        cr,
-        geo.cx,
-        geo.cy + 15.0,
-        if state.query.is_empty() {
-            "Open"
-        } else {
-            "1 match"
-        },
-        10.0,
-        (palette.muted.0, palette.muted.1, palette.muted.2, 0.9),
-        geo.inner * 1.5,
-        false,
+        &[
+            TextLine {
+                value: &folder.label,
+                size: 15.0,
+                color: (color.0, color.1, color.2, 0.98),
+                bold: true,
+            },
+            TextLine {
+                value: status,
+                size: 10.0,
+                color: (palette.muted.0, palette.muted.1, palette.muted.2, 0.9),
+                bold: false,
+            },
+        ],
     );
     draw_caption(cr, geo, state, palette, 1);
 }
@@ -739,47 +743,48 @@ fn draw_empty(cr: &gtk::cairo::Context, geo: &Geometry, state: &State, palette: 
     let _ = cr.stroke();
 
     let width = geo.inner * 1.7;
+    let strong = (palette.text.0, palette.text.1, palette.text.2, 0.98);
     if state.query.is_empty() {
-        text(
+        text_stack(
             cr,
             geo.cx,
-            geo.cy - 7.0,
-            "No folders",
-            14.0,
-            (palette.text.0, palette.text.1, palette.text.2, 0.98),
+            geo.cy,
             width,
-            true,
-        );
-        text(
-            cr,
-            geo.cx,
-            geo.cy + 14.0,
-            "Click to manage",
-            10.0,
-            muted,
-            width,
-            false,
+            &[
+                TextLine {
+                    value: "No folders",
+                    size: 14.0,
+                    color: strong,
+                    bold: true,
+                },
+                TextLine {
+                    value: "Click to manage",
+                    size: 10.0,
+                    color: muted,
+                    bold: false,
+                },
+            ],
         );
     } else {
-        text(
+        text_stack(
             cr,
             geo.cx,
-            geo.cy - 7.0,
-            &state.query,
-            15.0,
-            (palette.text.0, palette.text.1, palette.text.2, 0.98),
+            geo.cy,
             width,
-            true,
-        );
-        text(
-            cr,
-            geo.cx,
-            geo.cy + 14.0,
-            "No matches",
-            10.0,
-            muted,
-            width,
-            false,
+            &[
+                TextLine {
+                    value: &state.query,
+                    size: 15.0,
+                    color: strong,
+                    bold: true,
+                },
+                TextLine {
+                    value: "No matches",
+                    size: 10.0,
+                    color: muted,
+                    bold: false,
+                },
+            ],
         );
     }
     draw_caption(cr, geo, state, palette, 0);
@@ -803,46 +808,47 @@ fn draw_center(
     let muted = (palette.muted.0, palette.muted.1, palette.muted.2, 0.9);
     let strong = (palette.text.0, palette.text.1, palette.text.2, 0.98);
     if state.query.is_empty() {
-        text(
+        text_stack(
             cr,
             geo.cx,
-            geo.cy - 6.0,
-            "Manage",
-            11.5,
-            strong,
+            geo.cy,
             width,
-            true,
-        );
-        text(
-            cr,
-            geo.cx,
-            geo.cy + 12.0,
-            "folders",
-            9.5,
-            muted,
-            width,
-            false,
+            &[
+                TextLine {
+                    value: "Manage",
+                    size: 12.0,
+                    color: strong,
+                    bold: true,
+                },
+                TextLine {
+                    value: "folders",
+                    size: 9.5,
+                    color: muted,
+                    bold: false,
+                },
+            ],
         );
     } else {
-        text(
+        let matches = format!("{count} match{}", if count == 1 { "" } else { "es" });
+        text_stack(
             cr,
             geo.cx,
-            geo.cy - 7.0,
-            &state.query,
-            14.0,
-            strong,
+            geo.cy,
             width,
-            true,
-        );
-        text(
-            cr,
-            geo.cx,
-            geo.cy + 12.0,
-            &format!("{count} match{}", if count == 1 { "" } else { "es" }),
-            9.5,
-            muted,
-            width,
-            false,
+            &[
+                TextLine {
+                    value: &state.query,
+                    size: 14.0,
+                    color: strong,
+                    bold: true,
+                },
+                TextLine {
+                    value: &matches,
+                    size: 9.5,
+                    color: muted,
+                    bold: false,
+                },
+            ],
         );
     }
 }
@@ -934,6 +940,26 @@ fn wedge(cr: &gtk::cairo::Context, cx: f64, cy: f64, inner: f64, outer: f64, sta
     cr.close_path();
 }
 
+fn text_layout(
+    cr: &gtk::cairo::Context,
+    value: &str,
+    size: f64,
+    max_width: f64,
+    bold: bool,
+) -> pango::Layout {
+    let layout = pangocairo::create_layout(cr);
+    let mut description = pango::FontDescription::from_string(&format!("Sans {size}"));
+    if bold {
+        description.set_weight(pango::Weight::Semibold);
+    }
+    layout.set_font_description(Some(&description));
+    layout.set_text(value);
+    layout.set_width((max_width.max(1.0) * pango::SCALE as f64) as i32);
+    layout.set_ellipsize(pango::EllipsizeMode::End);
+    layout.set_alignment(pango::Alignment::Center);
+    layout
+}
+
 #[allow(clippy::too_many_arguments)]
 fn text(
     cr: &gtk::cairo::Context,
@@ -945,18 +971,101 @@ fn text(
     max_width: f64,
     bold: bool,
 ) {
-    let layout = pangocairo::create_layout(cr);
-    let mut description = pango::FontDescription::from_string(&format!("Sans {size}"));
-    if bold {
-        description.set_weight(pango::Weight::Semibold);
-    }
-    layout.set_font_description(Some(&description));
-    layout.set_text(value);
-    layout.set_width((max_width.max(1.0) * pango::SCALE as f64) as i32);
-    layout.set_ellipsize(pango::EllipsizeMode::End);
-    layout.set_alignment(pango::Alignment::Center);
-    let (text_width, text_height) = layout.pixel_size();
+    let layout = text_layout(cr, value, size, max_width, bold);
+    let (_, height) = layout.pixel_size();
     cr.set_source_rgba(color.0, color.1, color.2, color.3);
-    cr.move_to(x - text_width as f64 / 2.0, y - text_height as f64 / 2.0);
+    // The layout width is the anchor width, not the ink width. Centering the
+    // drawn text by the ink width shifts every label to the right.
+    cr.move_to(x - max_width.max(1.0) / 2.0, y - height as f64 / 2.0);
     pangocairo::show_layout(cr, &layout);
+}
+
+#[derive(Clone, Copy)]
+struct TextLine<'a> {
+    value: &'a str,
+    size: f64,
+    color: (f64, f64, f64, f64),
+    bold: bool,
+}
+
+/// Draw a short stack of lines as one vertically centred block.
+fn text_stack(cr: &gtk::cairo::Context, x: f64, y: f64, max_width: f64, lines: &[TextLine<'_>]) {
+    if lines.is_empty() {
+        return;
+    }
+    let gap = 2.0;
+    // Align the visible glyphs, not the taller logical line boxes; otherwise
+    // descender space makes the block sit visibly above the ring centre.
+    let metrics: Vec<(f64, f64)> = lines
+        .iter()
+        .map(|line| {
+            let layout = text_layout(cr, line.value, line.size, max_width, line.bold);
+            let (ink, logical) = layout.pixel_extents();
+            let height = if ink.height() > 0 {
+                ink.height() as f64
+            } else {
+                logical.height() as f64
+            };
+            (ink.y() as f64, height)
+        })
+        .collect();
+    let total =
+        metrics.iter().map(|(_, height)| height).sum::<f64>() + gap * (lines.len() - 1) as f64;
+    let mut ink_top = y - total / 2.0;
+    for (line, (ink_y, height)) in lines.iter().zip(metrics) {
+        let layout = text_layout(cr, line.value, line.size, max_width, line.bold);
+        cr.set_source_rgba(line.color.0, line.color.1, line.color.2, line.color.3);
+        cr.move_to(x - max_width.max(1.0) / 2.0, ink_top - ink_y);
+        pangocairo::show_layout(cr, &layout);
+        ink_top += height + gap;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn geometry() -> Geometry {
+        Geometry::new(800.0, 380.0)
+    }
+
+    fn state(count: usize) -> State {
+        State {
+            filtered: (0..count).collect(),
+            ..State::default()
+        }
+    }
+
+    #[test]
+    fn hit_test_uses_top_centred_wedge_boundaries() {
+        let geo = geometry();
+        let state = state(4);
+        let r = 110.0;
+        let points = [
+            (geo.cx, geo.cy - r, 0),           // top
+            (geo.cx + r, geo.cy, 1),           // right
+            (geo.cx, geo.cy + r, 2),           // bottom
+            (geo.cx - r, geo.cy, 3),           // left
+            (geo.cx - 68.0, geo.cy - 87.0, 0), // top-left: still Assets
+            (geo.cx + 95.0, geo.cy - 55.0, 1), // upper-right: Design
+        ];
+        for (x, y, expected) in points {
+            assert_eq!(
+                hit_test(&geo, &state, x, y),
+                Hit::Sector(expected),
+                "point ({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn hit_test_separates_center_and_outside() {
+        let geo = geometry();
+        let state = state(4);
+        assert_eq!(hit_test(&geo, &state, geo.cx, geo.cy), Hit::Center);
+        assert_eq!(
+            hit_test(&geo, &state, geo.cx, geo.cy + geo.outer + 10.0),
+            Hit::Outside
+        );
+    }
 }
