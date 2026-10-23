@@ -4,7 +4,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="Radial overlay launcher for project folders (Wayland/X11, KDE Plasma)"
 arch=('x86_64' 'aarch64')
-url="https://github.com/raihan/radial-deck"
+url="https://github.com/ReyyIchiro/radialdeck"
 license=('MIT')
 depends=(
     'gtk4'
@@ -16,7 +16,7 @@ depends=(
 makedepends=('cargo' 'rust')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver/$pkgname-$pkgver.tar.gz")
 # TODO: update sha256 after first release tag
-sha256sums=('SKIP')
+sha256sums=('054b753d99414e684b24ca21ce36545bf74d83ed0b74a809a1344348559be84a')
 
 prepare() {
     cd "$pkgname-$pkgver"

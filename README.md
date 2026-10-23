@@ -44,7 +44,7 @@ di tengah layar, ketik untuk filter, klik atau tekan angka untuk buka.
 ### Cara cepat (user-local, tanpa sudo)
 
 ```bash
-git clone https://github.com/raihan/radial-deck.git
+git clone https://github.com/ReyyIchiro/radialdeck.git
 cd radial-deck
 ./scripts/install.sh
 ```

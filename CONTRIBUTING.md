@@ -11,7 +11,7 @@ Terima kasih atas minatmu! Dokumen ini menjelaskan standar dan proses kontribusi
 ## Setup
 
 ```bash
-git clone https://github.com/raihan/radial-deck.git
+git clone https://github.com/ReyyIchiro/radialdeck.git
 cd radial-deck
 cargo build
 ```
