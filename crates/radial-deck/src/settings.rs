@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::rc::Weak;
+use std::rc::{Rc, Weak};
 
 use deck_core::Theme;
 use gtk::pango;
@@ -16,11 +16,11 @@ pub struct SettingsWindow {
     close_switch: gtk::Switch,
     autostart_switch: gtk::Switch,
     terminal: gtk::DropDown,
-    terminal_options: RefCell<Vec<String>>,
+    terminal_options: Rc<RefCell<Vec<String>>>,
     theme: gtk::DropDown,
     config_path: gtk::Label,
     controller: Weak<Controller>,
-    suppress: Cell<bool>,
+    suppress: Rc<Cell<bool>>,
 }
 
 impl SettingsWindow {
@@ -148,11 +148,11 @@ impl SettingsWindow {
             close_switch,
             autostart_switch,
             terminal,
-            terminal_options: RefCell::new(Vec::new()),
+            terminal_options: Rc::new(RefCell::new(Vec::new())),
             theme: theme_dropdown,
             config_path,
             controller: controller.clone(),
-            suppress: Cell::new(false),
+            suppress: Rc::new(Cell::new(false)),
         };
 
         settings.connect_signals(&change, &open_folder);
@@ -179,7 +179,7 @@ impl SettingsWindow {
         }
         {
             let controller = self.controller.clone();
-            let suppress = self.suppress.clone();
+            let suppress = Rc::clone(&self.suppress);
             self.close_switch.connect_active_notify(move |switch| {
                 if suppress.get() {
                     return;
@@ -191,7 +191,7 @@ impl SettingsWindow {
         }
         {
             let controller = self.controller.clone();
-            let suppress = self.suppress.clone();
+            let suppress = Rc::clone(&self.suppress);
             self.autostart_switch.connect_active_notify(move |switch| {
                 if suppress.get() {
                     return;
@@ -203,8 +203,8 @@ impl SettingsWindow {
         }
         {
             let controller = self.controller.clone();
-            let suppress = self.suppress.clone();
-            let terminal_options = self.terminal_options.clone();
+            let suppress = Rc::clone(&self.suppress);
+            let terminal_options = Rc::clone(&self.terminal_options);
             self.terminal.connect_selected_notify(move |dropdown| {
                 if suppress.get() {
                     return;
@@ -224,7 +224,7 @@ impl SettingsWindow {
         }
         {
             let controller = self.controller.clone();
-            let suppress = self.suppress.clone();
+            let suppress = Rc::clone(&self.suppress);
             self.theme.connect_selected_notify(move |dropdown| {
                 if suppress.get() {
                     return;
@@ -253,7 +253,16 @@ impl SettingsWindow {
         let Some(controller) = self.controller.upgrade() else {
             return;
         };
-        let config = controller.config();
+        let (close_after, autostart, preferred_terminal, theme_pref) = {
+            let config = controller.config();
+            (
+                config.preferences.close_after_launch,
+                config.preferences.launch_at_login,
+                config.preferences.terminal.clone(),
+                config.preferences.theme,
+            )
+        };
+
         self.suppress.set(true);
 
         self.shortcut.set_text(&controller.display_shortcut());
@@ -268,10 +277,8 @@ impl SettingsWindow {
             }
         }
 
-        self.close_switch
-            .set_active(config.preferences.close_after_launch);
-        self.autostart_switch
-            .set_active(config.preferences.launch_at_login);
+        self.close_switch.set_active(close_after);
+        self.autostart_switch.set_active(autostart);
 
         let mut options = vec!["Auto-detect".to_string()];
         options.extend(
@@ -279,23 +286,21 @@ impl SettingsWindow {
                 .into_iter()
                 .map(str::to_string),
         );
-        if let Some(preferred) = config.preferences.terminal.as_deref() {
+        if let Some(preferred) = preferred_terminal.as_deref() {
             if !options.iter().any(|option| option == preferred) {
                 options.push(preferred.to_string());
             }
         }
         let refs: Vec<&str> = options.iter().map(String::as_str).collect();
         self.terminal.set_model(Some(&gtk::StringList::new(&refs)));
-        let selected = config
-            .preferences
-            .terminal
+        let selected = preferred_terminal
             .as_deref()
             .and_then(|preferred| options.iter().position(|option| option == preferred))
             .unwrap_or(0);
         self.terminal.set_selected(selected as u32);
         *self.terminal_options.borrow_mut() = options;
 
-        self.theme.set_selected(match config.preferences.theme {
+        self.theme.set_selected(match theme_pref {
             Theme::System => 0,
             Theme::Light => 1,
             Theme::Dark => 2,
@@ -305,9 +310,7 @@ impl SettingsWindow {
         self.config_path
             .set_tooltip_text(Some(&controller.config_path().to_string_lossy()));
 
-        let theme_value = config.preferences.theme;
-        drop(config);
-        theme::apply_theme(theme_value);
+        theme::apply_theme(theme_pref);
         self.suppress.set(false);
     }
 }
