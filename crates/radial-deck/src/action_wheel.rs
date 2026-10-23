@@ -489,7 +489,9 @@ fn draw(
         );
     }
 
-    // Center chip.
+    // Center chip. Start a fresh path: text drawing leaves a current point
+    // behind, and cairo would otherwise connect it to the arc with a chord.
+    cr.new_path();
     cr.arc(geometry.cx, geometry.cy, geometry.inner * 0.86, 0.0, TAU);
     cr.set_source_rgba(palette.center.0, palette.center.1, palette.center.2, 1.0);
     cr.fill_preserve().ok();
@@ -649,4 +651,30 @@ fn draw_text(
     cr.set_source_rgba(color.0, color.1, color.2, alpha);
     cr.move_to(x - text_width as f64 / 2.0, y - text_height as f64 / 2.0);
     pangocairo::show_layout(cr, &layout);
+    // move_to() opens a path subpath at the text anchor. Clear it so a later
+    // arc/fill/stroke cannot draw a line from the text to its own path.
+    cr.new_path();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drawing_text_leaves_no_path() {
+        let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 32, 32).unwrap();
+        let cr = cairo::Context::new(&surface).unwrap();
+        draw_text(
+            &cr,
+            "PDF",
+            16.0,
+            16.0,
+            12.0,
+            pango::Weight::Semibold,
+            (1.0, 1.0, 1.0),
+            1.0,
+            false,
+        );
+        assert!(!cr.has_current_point().unwrap());
+    }
 }
