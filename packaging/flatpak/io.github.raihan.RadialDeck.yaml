@@ -12,8 +12,9 @@ finish-args:
   # X11 fallback
   - --socket=fallback-x11
   - --share=ipc
-  # Access to user's home for folder browsing
-  - --filesystem=home:ro
+  # Conversions are written next to the source file, so the sandbox needs
+  # write access. A narrower portal-based flow is future work.
+  - --filesystem=home
   # D-Bus for XDG portal (GlobalShortcuts, OpenURI, FileChooser)
   - --talk-name=org.freedesktop.portal.Desktop
   - --talk-name=org.freedesktop.portal.GlobalShortcuts

@@ -2,7 +2,7 @@
 pkgname=radial-deck
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Radial overlay launcher for project folders (Wayland/X11, KDE Plasma)"
+pkgdesc="Radial file conversion and project folder launcher (Wayland, KDE Plasma)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/ReyyIchiro/radialdeck"
 license=('MIT')
@@ -12,6 +12,13 @@ depends=(
     'xdg-desktop-portal'
     'xdg-utils'
     'hicolor-icon-theme'
+)
+optdepends=(
+    'imagemagick: HEIC/AVIF/PDF image output and extra input formats'
+    'ffmpeg: video and audio conversions'
+    'poppler: PDF to image/text conversions'
+    'libreoffice-fresh: document, slide and spreadsheet conversions (libreoffice-still also works)'
+    'pandoc: document and EPUB to Markdown conversions'
 )
 makedepends=('cargo' 'rust')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver/$pkgname-$pkgver.tar.gz")
@@ -46,6 +53,9 @@ package() {
 
     install -Dm644 "packaging/io.github.raihan.RadialDeck.svg" \
         "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.raihan.RadialDeck.svg"
+
+    install -Dm644 "packaging/io.github.raihan.RadialDeck.servicemenu.desktop" \
+        "$pkgdir/usr/share/kio/servicemenus/io.github.raihan.RadialDeck.desktop"
 
     install -Dm644 LICENSE \
         "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Service
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
+MimeType=all/allfiles;inode/directory;
+Actions=RadialDeckActions;
+X-KDE-Priority=TopLevel
+
+[Desktop Action RadialDeckActions]
+Name=RadialDeck actions…
+Icon=io.github.raihan.RadialDeck
+Exec=radial-deck %F

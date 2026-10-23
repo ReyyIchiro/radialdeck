@@ -23,6 +23,7 @@ BIN="$PREFIX/bin"
 SHARE="$PREFIX/share"
 APPS="$SHARE/applications"
 ICONS="$SHARE/icons/hicolor/scalable/apps"
+SERVICEMENUS="$SHARE/kio/servicemenus"
 
 # ── Check dependencies ────────────────────────────────────────────────────────
 missing=()
@@ -59,6 +60,14 @@ update-desktop-database "$APPS" 2>/dev/null || true
 install -Dm644 packaging/io.github.raihan.RadialDeck.svg \
     "$ICONS/io.github.raihan.RadialDeck.svg"
 
+# ── Install Dolphin service menu (right-click → RadialDeck actions) ───────────
+mkdir -p "$SERVICEMENUS"
+sed "s|Exec=radial-deck|Exec=$BIN/radial-deck|" \
+    packaging/io.github.raihan.RadialDeck.servicemenu.desktop \
+    > "$SERVICEMENUS/io.github.raihan.RadialDeck.desktop"
+chmod 644 "$SERVICEMENUS/io.github.raihan.RadialDeck.desktop"
+kbuildsycoca6 >/dev/null 2>&1 || true
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 cat <<MSG
 
@@ -67,8 +76,10 @@ cat <<MSG
   Run once to register global shortcut:
     radial-deck --hidden
 
-  Or open the launcher immediately:
+  Open the action wheel immediately:
     radial-deck --show
+
+  Right-click any file in Dolphin → "RadialDeck actions…"
 
   To uninstall:
     $ROOT/scripts/uninstall.sh --prefix $PREFIX
