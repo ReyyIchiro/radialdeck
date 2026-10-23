@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::folder::{normalize_color, Availability, Folder, FolderError, Project};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Persisted application state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,6 +207,7 @@ impl Config {
     /// valid colors, absolute folder paths, and a valid active project.
     /// Returns human-readable notes about anything that was repaired.
     pub fn normalize(&mut self) -> Vec<String> {
+        let previous_schema = self.schema;
         let mut notes = Vec::new();
         if self.schema > SCHEMA_VERSION {
             notes.push(format!(
@@ -223,6 +224,17 @@ impl Config {
         if self.preferences.projects_hotkey.trim().is_empty() {
             self.preferences.projects_hotkey = default_projects_hotkey();
             notes.push("restored the default project-folders shortcut".into());
+        }
+        // Schema 3 moves the project wheel off the old P default. Only
+        // migrate the old default, not a shortcut chosen after upgrading.
+        if previous_schema < 3
+            && self
+                .preferences
+                .projects_hotkey
+                .eq_ignore_ascii_case("CTRL+ALT+P")
+        {
+            self.preferences.projects_hotkey = default_projects_hotkey();
+            notes.push("project folders shortcut moved to CTRL+ALT+Q".into());
         }
         if self
             .preferences
@@ -343,7 +355,7 @@ fn default_hotkey() -> String {
 }
 
 fn default_projects_hotkey() -> String {
-    "CTRL+ALT+P".into()
+    "CTRL+ALT+Q".into()
 }
 
 fn default_true() -> bool {
@@ -474,8 +486,21 @@ mod tests {
 
         let mut config: Config = serde_json::from_value(value).unwrap();
         assert_eq!(config.schema, 1);
-        assert_eq!(config.preferences.projects_hotkey, "CTRL+ALT+P");
+        assert_eq!(config.preferences.projects_hotkey, "CTRL+ALT+Q");
         assert!(config.normalize().is_empty());
+        assert_eq!(config.schema, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn old_project_shortcut_migrates_to_q() {
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        value["schema"] = serde_json::json!(2);
+        value["preferences"]["projects_hotkey"] = serde_json::json!("CTRL+ALT+P");
+
+        let mut config: Config = serde_json::from_value(value).unwrap();
+        let notes = config.normalize();
+        assert_eq!(config.preferences.projects_hotkey, "CTRL+ALT+Q");
+        assert!(notes.iter().any(|note| note.contains("CTRL+ALT+Q")));
         assert_eq!(config.schema, SCHEMA_VERSION);
     }
 

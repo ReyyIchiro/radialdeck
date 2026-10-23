@@ -40,7 +40,7 @@ clipboard, notifikasi, autostart.
 
 1. `hotkey.rs` membuat satu sesi `org.freedesktop.portal.GlobalShortcuts` dengan dua
    binding: `toggle` (quick actions, default `Ctrl+Alt+Space`) dan `projects` (folder,
-   default `Ctrl+Alt+P`).
+   default `Ctrl+Alt+Q`).
 2. Portal (KDE) menyimpan persetujuan user per binding; sinyal `Activated(id)` membawa id
    sehingga controller memilih overlay yang benar. Binding tidak memakai `XGrabKey`/Carbon;
    aman di Wayland dan tidak mencuri input saat aplikasi lain fokus.
@@ -135,8 +135,10 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
   - schema lebih baru → app berhenti dengan pesan jelas.
 - `Config::normalize` memperbaiki invariant (project minimal satu, id unik, path absolut,
   warna valid, project aktif valid, shortcut tidak duplikat) tanpa menyentuh file di disk.
-- Schema 2 menambahkan `preferences.projects_hotkey`. Migrasi aditif dari schema 1; file
-  dengan schema lebih baru ditolak sebelum ditulis.
+- Schema 2 menambahkan `preferences.projects_hotkey`. Migrasi aditif dari schema 1.
+- Schema 3 memindahkan default shortcut project dari `CTRL+ALT+P` ke `CTRL+ALT+Q`; hanya
+  nilai default lama yang dimigrasikan, shortcut pilihan pengguna dibiarkan. File dengan
+  schema lebih baru ditolak sebelum ditulis.
 - Config disimpan ulang hanya saat ada perubahan; refresh UI tidak menulis disk.
 
 ## Keamanan

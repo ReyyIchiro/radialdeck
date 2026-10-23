@@ -48,7 +48,7 @@ impl Default for WheelData {
             active_project: Uuid::nil(),
             project_name: "My Project".into(),
             project_color: "#3b82f6".into(),
-            shortcut: "CTRL+ALT+P".into(),
+            shortcut: "CTRL+ALT+Q".into(),
             folders: Vec::new(),
             projects: Vec::new(),
         }

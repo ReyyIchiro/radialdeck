@@ -16,7 +16,7 @@ keputusan platform, bukan checklist harian.
 ## Tahap 1 — Linux (selesai)
 
 Cakupan: dua roda, dua hotkey portal, layer-shell, tray, autostart, Dolphin service menu,
-konversi lokal, konfigurasi schema 2, installer user-local, PKGBUILD, CI.
+konversi lokal, konfigurasi schema 3, installer user-local, PKGBUILD, CI.
 
 Sisa tahap Linux:
 
@@ -45,7 +45,7 @@ Alasan:
 Kebutuhan shell:
 
 1. Jendela borderless, topmost, `skipTaskbar`, transparan, fullscreen satu monitor.
-2. Dua hotkey: `Ctrl+Alt+Space` dan `Ctrl+Alt+P`, dapat diubah.
+2. Dua hotkey: `Ctrl+Alt+Space` dan `Ctrl+Alt+Q`, dapat diubah.
 3. Tray dengan menu yang sama; close ke tray.
 4. Autostart lewat registry `Run` atau Startup folder; sediakan toggle.
 5. Buka folder di Explorer, terminal (Windows Terminal/PowerShell), salin path.

@@ -3,7 +3,7 @@
 Overlay radial untuk Linux dengan dua alur yang terpisah:
 
 - **Quick actions** — `Ctrl+Alt+Space`: konversi file/arsip dan aksi file.
-- **Project folders** — `Ctrl+Alt+P`: buka folder proyek favorit.
+- **Project folders** — `Ctrl+Alt+Q`: buka folder proyek favorit.
 
 Jalankan `radial-deck` dengan file/folder sebagai argumen, drag file ke panel, atau klik
 kanan file di Dolphin untuk langsung membuka roda konversi.
@@ -107,7 +107,7 @@ install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 | Tombol | Aksi |
 |---|---|
 | `Ctrl+Alt+Space` | Toggle roda quick actions (global) |
-| `Ctrl+Alt+P` | Toggle roda project folders (global) |
+| `Ctrl+Alt+Q` | Toggle roda project folders (global) |
 | Panah / scroll | Pilih format atau folder |
 | `1`–`9` | Jalankan item ke-N |
 | `Enter` | Terapkan format / buka folder |
@@ -166,9 +166,14 @@ dan saat ada beberapa folder pusat membuka Manage.
 Folder: `$XDG_CONFIG_HOME/radial-deck/config.json` (default `~/.config/radial-deck/config.json`).
 Ditulis otomatis dan atomik; tidak perlu edit manual. Path konversi tidak disimpan.
 
-Schema saat ini **2**; file schema 1 dibaca sebagai schema 2 saat load dengan shortcut
-project default (`projects_hotkey`), lalu ditulis sebagai schema 2 pada perubahan config
-berikutnya. File yang lebih baru ditolak dengan pesan jelas, bukan ditimpa. Detail invariant ada di [`docs/architecture.md`](docs/architecture.md).
+Schema saat ini **3**. File schema 1 dibaca sebagai schema 2 saat load dengan shortcut
+project default; file schema 2 yang masih memakai default lama `CTRL+ALT+P` dimigrasikan
+ke `CTRL+ALT+Q`, lalu ditulis sebagai schema 3 pada perubahan config berikutnya. File yang
+lebih baru ditolak dengan pesan jelas, bukan ditimpa.
+
+Di KDE, portal menyimpan binding yang sudah pernah disetujui pengguna. Jika binding lama
+masih `Ctrl+Alt+P`, buka **Settings → Configure Shortcuts** sekali dan pilih `Ctrl+Alt+Q`;
+setelah itu binding baru dipakai. Install baru langsung memakai `Ctrl+Alt+Q`. Detail invariant ada di [`docs/architecture.md`](docs/architecture.md).
 
 Log: `$XDG_STATE_HOME/radial-deck/logs/radial-deck.YYYY-MM-DD.log`
 (fallback `~/.local/state/...`), retensi 7 hari. Buka lewat **Settings → Open Logs** atau
@@ -234,7 +239,7 @@ CI menjalankan fmt, clippy, test, dan build release di Ubuntu 24.04.
 | Unit test | ✅ 45 lulus (`deck-core` 40, app 5) |
 | fmt + clippy `-D warnings` | ✅ bersih |
 | Layer-shell roda konversi + roda folder | ✅ screenshot KDE Wayland |
-| Dua hotkey portal | ✅ `Ctrl+Alt+Space` dan `Ctrl+Alt+P` aktif bersamaan |
+| Dua hotkey portal | ✅ `Ctrl+Alt+Space` dan `Ctrl+Alt+Q` aktif bersamaan |
 | Target folder tunggal (cincin penuh) | ✅ klik target membuka Dolphin, panel tertutup |
 | Rail project overflow `+3` | ✅ screenshot: 5 tab + popover, tab aktif vs fokus keyboard |
 | Mode tanpa hasil filter | ✅ sektor disembunyikan, caption “No matches” |

@@ -7,7 +7,7 @@ sudah terbukti, apa yang belum, dan apa berikutnya.
 ## Snapshot
 
 - Tanggal: 2026-10-23
-- Versi: 0.1.0 (schema config 2)
+- Versi: 0.1.0 (schema config 3)
 - Platform terverifikasi: CachyOS, KDE Plasma 6, Wayland, GTK 4.20 / layer-shell
 - Fokus: Linux tahap 1 selesai; Windows/macOS belum dimulai
 
@@ -29,9 +29,9 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 |---|---|
 | `cargo fmt --all` | bersih |
 | `cargo clippy --workspace --all-targets -- -D warnings` | bersih |
-| `cargo test --workspace` | 45 lulus (40 core + 5 app) |
+| `cargo test --workspace` | 49 lulus (41 core + 8 app) |
 | `cargo build --release --locked` | lulus |
-| Dua shortcut portal | `Ctrl+Alt+Space` → quick actions, `Ctrl+Alt+P` → project folders |
+| Dua shortcut portal | `Ctrl+Alt+Space` → quick actions, `Ctrl+Alt+Q` → project folders |
 | Klik luar lalu satu kali hotkey | membuka overlay kembali (regresi fixed) |
 | `Esc`, klik luar, hotkey toggle | state controller dan window konsisten |
 | Roda folder satu item | target cincin penuh, label tidak terpotong |
@@ -78,7 +78,10 @@ tidak ada perubahan pada `deck-core::convert`.
   empty state, reorder; delete project dinonaktifkan saat hanya satu project.
 - Settings: dua shortcut, pintasan ke Manage, path log + tombol buka log.
 - Log harian di `$XDG_STATE_HOME/radial-deck/logs`, retensi 7 file.
-- Config schema 2 + migrasi aditif (`projects_hotkey`); duplikat shortcut diperbaiki.
+- Config schema 3: migrasi aditif `projects_hotkey`, default project pindah ke
+  `CTRL+ALT+Q`, lalu duplikat shortcut diperbaiki.
+- Garis diagonal pada roda aksi diperbaiki: tiap label memakai path Cairo baru sehingga
+  path teks tidak tersambung ke wedge berikutnya.
 
 ## Known issues / batasan
 
