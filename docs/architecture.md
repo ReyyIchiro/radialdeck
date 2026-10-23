@@ -4,10 +4,10 @@
 
 ```text
 ┌──────────────────────────── radial-deck (GTK4, main thread) ───────────────────────────┐
-│ launcher.rs  overlay layer-shell + wheel.rs (Cairo)   manage.rs   settings.rs           │
+│ action_launcher.rs (panel, tabs, DnD) + action_wheel.rs (Cairo)                         │
+│ launcher.rs + wheel.rs (roda folder)      manage.rs      settings.rs                   │
 │        ▲                     ▲                              ▲            ▲              │
-│        │                     │                              │            │              │
-│                     controller.rs (state, persistence, actions, windows)               │
+│                     controller.rs (state, CLI, actions, windows)                        │
 │        │                     │                              │            │              │
 └────────┼─────────────────────┼──────────────────────────────┼────────────┼──────────────┘
          │ async-channel       │                              │            │
@@ -19,7 +19,8 @@
 └──────────────────┘  └──────────────────┘          └──────────────────┘  └───────────────┘
          │
 ┌────────┴────────────────────────────────────────────────────────────────────────────────┐
-│ deck-core: Config, Project, Folder, availability, search, Store (XDG, atomic save)      │
+│ deck-core: Config/Project/Folder, search, Store (XDG, atomic save)                      │
+│ convert::registry (kategori, target, availability), convert::* (image/ffmpeg/office)    │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -27,8 +28,8 @@
 
 | Crate | Tanggung jawab | Dependensi UI/OS |
 |---|---|---|
-| `crates/deck-core` | model, validasi, pencarian, persistensi atomik, availability | tidak ada |
-| `crates/radial-deck` | shell Linux: GTK4, layer-shell, portal, tray, autostart, aksi | ya (Linux) |
+| `crates/deck-core` | model, validasi, pencarian, persistensi atomik, registry konversi + eksekusi tool | tidak ada (hanya `std::process::Command`) |
+| `crates/radial-deck` | shell Linux: GTK4, layer-shell, portal, tray, autostart, roda konversi | ya (Linux) |
 
 Core tidak mengetahui GTK, Wayland, XDG portal, atau path config default selain lewat
 `default_config_path()`. Untuk port Windows/macOS, buat crate app baru yang memakai
@@ -61,6 +62,27 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
   keterbatasan.
 - Keyboard exclusive memberi fokus penuh saat panel tampil; `Esc` selalu menutup.
 
+## Roda konversi
+
+- Dua entry point berbagi `ActionLauncher`: CLI/`dolphin` service menu (`radial-deck FILE...`)
+  dan drag & drop. Instance kedua meneruskan argv ke instance utama lewat
+  `GApplicationFlags::HANDLES_COMMAND_LINE`; tidak ada daemon tambahan.
+- `Cli::parse` memvalidasi path (harus ada; path relatif dinormalisasi terhadap CWD).
+  Kategori diambil dari file pertama; sumber tetap disimpan semua.
+- `convert::registry::targets()` menghasilkan daftar target tetap per kategori. Setiap
+  target membawa `reason` bila tidak tersedia; UI menampilkannya sebagai wedge redup,
+  strikethrough, tooltip, dan status saat diklik.
+- Tool eksternal dideteksi sekali saat startup dengan memindai `PATH` plus fallback
+  `/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin` (desktop launch sering
+  tidak memasukkan sbin, padahal Arch menaruh `ffmpeg`/`magick`/`soffice` di sana).
+- Klik target yang tersedia: panel langsung disembunyikan, sumber difilter sesuai kategori,
+  lalu `std::thread` menjalankan batch. Hasil dikirim balik lewat `async_channel` dan
+  diproses di main context (`glib::spawn_future_local`) supaya tidak ada mutasi UI dari
+  thread lain. Satu konversi pada satu waktu (`converting` flag).
+- Output ditulis di direktori sumber; nama yang sudah ada tidak ditimpa (error dilaporkan).
+- Dismiss: `Escape` di level window (capture phase) dan klik pada scrim (pick-test),
+  sehingga klik di wedge tidak ikut menutup panel.
+
 ## Persistensi
 
 - Path: `$XDG_CONFIG_HOME/radial-deck/config.json` (fallback `~/.config/...`).
@@ -76,9 +98,13 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
 
 ## Keamanan
 
-- Tidak ada shell. `xdg-open`/terminal dipanggil dengan `Command` + argv; input user hanya
-  boleh berupa nama executable polos untuk terminal (tanpa `/`, spasi, newline), argumen
-  dipilih dari tabel tetap.
+- Tidak ada shell. `xdg-open`, terminal, dan seluruh konverter dipanggil dengan `Command`
+  + argv; nama executable konverter berasal dari konstanta, target id berasal dari registry
+  tetap, dan path file menjadi argumen terpisah (tanpa escaping shell).
+- Path sumber divalidasi ada dan dinormalisasi; output selalu di direktori sumber dan
+  operasi menolak menimpa file yang sudah ada.
+- Format target tidak dapat diinjeksi dari CLI; hanya id yang ada di registry kategori
+  yang dijalankan.
 - Tidak ada evaluasi kode/konfigurasi; JSON hanya data.
 - Tidak ada jaringan; notifikasi, tray, portal memakai D-Bus sesi.
 - Path folder disimpan sebagai path absolut; tidak ada bookmark/token karena app native
@@ -89,25 +115,36 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
 
 - Event-driven: tidak ada polling. Hotkey/tray menunggu sinyal D-Bus; UI hanya redraw saat
   interaksi.
-- Overlay dibuat lazy saat pertama dipakai, sehingga idle hanya tray + hotkey + GTK loop.
+- Overlay dibuat lazy saat pertama dipakai; idle hanya tray + hotkey + GTK loop.
+- Konversi berjalan di thread terpisah; UI tidak memblokir dan progres tidak memicu polling.
 - Tidak menyentuh GPU NVIDIA; GTK/KWin memakai renderer default Intel.
 - Wheel digambar dengan Cairo (CPU) hanya saat tampil/berubah.
+- Release idle: ~25 MB PSS (~48 MB RSS termasuk shared library GTK), binary stripped 6.3 MB (diukur pada rilis 0.1.0).
 
 ## Struktur kode Linux
 
 ```text
+crates/deck-core/src/
+├── convert/registry.rs  # kategori, target, availability, deteksi tool
+├── convert/image.rs     # native image crate + ImageMagick fallback
+├── convert/external.rs  # ffmpeg, pdftoppm/pdftotext, LibreOffice, pandoc
+├── convert/archive.rs   # ZIP/TAR/GZIP (compress + extract)
+└── convert/mod.rs       # orkestrasi batch, Outcome, naming
+
 crates/radial-deck/src/
-├── main.rs          # GtkApplication, single instance, CLI
-├── controller.rs    # state + semua mutasi + jembatan UI
-├── launcher.rs      # layer-shell overlay window
-├── wheel.rs         # radial drawing, hit-testing, keyboard, context menu
-├── manage.rs        # CRUD project/folder, file chooser, drag & drop
-├── settings.rs      # hotkey portal, autostart, terminal, tema
-├── hotkey.rs        # GlobalShortcuts portal (tokio)
-├── tray.rs          # StatusNotifierItem (ksni)
-├── actions.rs       # xdg-open, terminal, clipboard
-├── autostart.rs     # XDG autostart desktop entry
-└── theme.rs         # CSS + deteksi dark
+├── main.rs              # GtkApplication, single instance, CLI
+├── controller.rs        # state + semua mutasi + jembatan UI + worker konversi
+├── action_launcher.rs   # overlay panel konversi, tab, drag & drop, dismiss
+├── action_wheel.rs      # roda konversi Cairo, hit-test, keyboard, hover
+├── launcher.rs          # layer-shell overlay roda folder
+├── wheel.rs             # roda folder: drawing, hit-test, context menu
+├── manage.rs            # CRUD project/folder, file chooser, drag & drop
+├── settings.rs          # hotkey portal, autostart, terminal, tema
+├── hotkey.rs            # GlobalShortcuts portal (tokio)
+├── tray.rs              # StatusNotifierItem (ksni)
+├── actions.rs           # xdg-open, terminal, clipboard
+├── autostart.rs         # XDG autostart desktop entry
+└── theme.rs             # CSS + deteksi dark (GTK + KDE color scheme)
 ```
 
 ## Verifikasi
@@ -117,3 +154,5 @@ crates/radial-deck/src/
 - CI: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --locked`, build Arch.
 - Uji manual Wayland: hotkey portal, overlay layer-shell, fokus keyboard, launch folder,
   tray, restart persistence.
+- Uji end-to-end konversi (KDE Wayland, klik roda): PNG→JPG, WAV→MP3, PNG→WEBP;
+  verifikasi file dengan `file`/`ffprobe`; single-instance forwarding; dismiss Esc/klik luar.

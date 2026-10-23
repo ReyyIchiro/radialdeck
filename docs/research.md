@@ -70,4 +70,26 @@ Repo: `radial-deck` (binary `radial-deck`). Lisensi proyek: MIT. Atribusi ide ke
 - Hotkey default `Ctrl+Alt+Space` (menghindari konflik input-switch KDE `Ctrl+Space`). Portal dapat meminta konfirmasi satu kali.
 - Wayland tidak memungkinkan posisi kursor global; panel muncul di tengah output aktif. Di X11 posisi mengikuti kursor.
 - Manajemen file/folder memakai path asli tanpa sandbox (app native, bukan Flatpak sandbox) — Flatpak nanti memakai portal FileChooser + Document portal.
-- Konversi file ala Tangerine tidak masuk MVP; arsitektur aksi disiapkan untuk itu.
+- Konversi format ala roda `Shift` Tangerine masuk MVP Linux; file tools lain (crop, trim,
+  merge, AirDrop/Float) belum. Prioritas: format conversion yang deterministik dan dapat
+  diverifikasi dengan tool CLI yang sudah lazim di Linux.
+
+## 6. Implementasi konversi Linux
+
+| Kebutuhan macOS | Padanan Linux | Catatan |
+|---|---|---|
+| ImageIO/CoreGraphics | crate `image` + ImageMagick | Native untuk format umum; ImageMagick untuk HEIC/AVIF/PDF/ekstraksi |
+| AVFoundation | `ffmpeg` | Video/audio, termasuk GIF dan ekstraksi audio |
+| PDFKit | `pdftoppm` / `pdftotext` (poppler) | Render halaman dan ekstraksi teks |
+| Quick Look/Office | LibreOffice headless (`soffice --convert-to`) | Dokumen, slide, spreadsheet |
+| EPUB tools | `pandoc` | EPUB/Markdown/HTML/DOCX |
+| Archive Utility | `zip`, `unzip`, `tar`, `gzip` | Kompresi dan ekstraksi; tidak memakai shell |
+
+Deteksi tool dilakukan sekali saat startup; target yang tidak tersedia tetap tampil dengan
+alasan agar pengguna tahu dependensi yang perlu dipasang. Semua proses memakai
+`Command` + argv tanpa shell. Konversi dijalankan di luar main thread dan hasilnya
+dilaporkan lewat notifikasi desktop.
+
+**Batas lingkup:** roda aksi file Tangerine (AirDrop, Float, Copy/Move, Terminal, crop,
+trim, merge) tidak disalin; hanya konversi format dan kompresi/ekstraksi arsip yang
+diimplementasikan pada tahap ini.

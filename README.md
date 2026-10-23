@@ -1,12 +1,13 @@
 # RadialDeck
 
-Overlay launcher untuk folder proyek di Linux (Wayland/X11, KDE Plasma).
+Overlay radial untuk Linux: konversi file dan buka folder proyek dari satu shortcut.
 
-Buka folder kerja dari mana saja dengan satu shortcut keyboard: roda jari-jari muncul
-di tengah layar, ketik untuk filter, klik atau tekan angka untuk buka.
+Tekan `Ctrl+Alt+Space`, atau jalankan `radial-deck` dengan file/folder sebagai argumen,
+lalu pilih format pada roda. Drag file ke panel juga bisa; klik kanan file di Dolphin
+untuk membuka roda langsung.
 
-> Terinspirasi oleh [Tangerine for Mac](https://tangerineformac.com/) dan
-> [ProjectDeck](https://github.com/nizar268/Shortcut-Floating).
+> Terinspirasi oleh [Tangerine for Mac](https://tangerineformac.com/) (UX roda konversi)
+> dan [ProjectDeck](https://github.com/nizar268/Shortcut-Floating) (arsitektur launcher).
 > Tidak ada kode yang disalin; implementasi asli, lisensi MIT.
 
 ---
@@ -15,33 +16,43 @@ di tengah layar, ketik untuk filter, klik atau tekan angka untuk buka.
 
 | Fitur | Status |
 |---|---|
-| Overlay roda radial (Wayland layer-shell) | ✅ |
-| Shortcut global via XDG GlobalShortcuts portal | ✅ |
-| Pencarian real-time (ketik langsung) | ✅ |
-| Navigasi keyboard (angka, panah, Tab, Enter, Esc) | ✅ |
-| Klik kiri buka · klik kanan menu konteks | ✅ |
-| Multi-project dengan Tab/← → | ✅ |
-| Manage folder (drag-drop, file chooser) | ✅ |
-| System tray (StatusNotifierItem) | ✅ |
-| Tema ikut sistem / paksa Light / Dark | ✅ |
-| Autostart XDG | ✅ |
-| Buka terminal di folder (Ctrl+Enter) | ✅ |
-| Salin path ke clipboard (klik tengah) | ✅ |
-| Konfigurasi JSON atomik di XDG_CONFIG_HOME | ✅ |
+| Roda konversi radial (Wayland layer-shell, Cairo) | ✅ |
+| 10 kategori: gambar, video, audio, PDF, dokumen, slide, spreadsheet, EPUB, subtitle, arsip | ✅ |
+| Drag & drop file ke panel; multi-file / mixed selection | ✅ |
+| Format yang tidak tersedia ditandai redup + alasan (tooltip/status) | ✅ |
+| Klik kanan file di Dolphin → **RadialDeck actions…** | ✅ |
+| Single instance: argumen file diteruskan ke proses yang sudah berjalan | ✅ |
+| Global hotkey via XDG GlobalShortcuts portal | ✅ |
+| Navigasi keyboard: panah/scroll, angka `1`–`9`, `Enter`, `Esc` | ✅ |
+| Roda folder proyek: filter real-time, multi-project, terminal, clipboard | ✅ |
+| Manage folder, settings, autostart XDG, system tray | ✅ |
+| Tema mengikuti sistem (KDE color scheme + GTK) / paksa Light / Dark | ✅ |
+| Konfigurasi JSON atomik di `XDG_CONFIG_HOME` | ✅ |
 
 ---
 
 ## Kebutuhan Sistem
 
 - **OS:** Linux (Arch/CachyOS diuji; Debian/Ubuntu kompatibel)
-- **Desktop:** KDE Plasma 6 (Wayland, primary target) atau X11 fallback
-- **Runtime:** gtk4, gtk4-layer-shell, xdg-desktop-portal, xdg-utils
+- **Desktop:** KDE Plasma 6 Wayland (target utama), X11 fallback
+- **Wajib:** `gtk4`, `gtk4-layer-shell`, `xdg-desktop-portal`, `xdg-utils`
+- **Konverter opsional** (roda mendeteksi otomatis; format terkait dinonaktifkan bila
+  tool tidak ada):
+  - `imagemagick` — HEIC/AVIF/PDF output, format gambar non-native
+  - `ffmpeg` — video dan audio
+  - `poppler` (`pdftoppm`, `pdftotext`) — PDF → gambar/teks
+  - `libreoffice` — dokumen, slide, spreadsheet (ekspor EPUB memakai filter EPUB
+    bawaan LibreOffice; build yang tidak menyertakannya akan melaporkan error)
+  - `pandoc` — dokumen/EPUB → Markdown
+  - Arsip (ZIP/TAR/GZIP) ditangani native oleh Rust, tanpa binary eksternal.
+    GZIP pada satu file menghasilkan `.gz`; pada folder/arsip menghasilkan
+    `.tar.gz`.
 
 ---
 
 ## Instalasi
 
-### Cara cepat (user-local, tanpa sudo)
+### Cepat (user-local, tanpa sudo)
 
 ```bash
 git clone https://github.com/ReyyIchiro/radialdeck.git
@@ -49,8 +60,8 @@ cd radial-deck
 ./scripts/install.sh
 ```
 
-Script akan build release binary, install ke `~/.local/bin`, dan daftarkan desktop
-entry agar portal GlobalShortcuts bisa mengenali aplikasi.
+Script memasang binary ke `~/.local/bin`, desktop entry, ikon, dan service menu Dolphin.
+Jalankan sekali `radial-deck --hidden` lalu setujui dialog *Global Shortcuts* KDE.
 
 ### Arch / CachyOS (AUR)
 
@@ -59,16 +70,10 @@ cd packaging/aur
 makepkg -si
 ```
 
-Atau gunakan AUR helper (setelah versi pertama di-publish):
-
-```bash
-paru -S radial-deck
-```
-
 ### Build manual
 
 ```bash
-# install deps (Arch)
+# Arch
 sudo pacman -S gtk4 gtk4-layer-shell xdg-desktop-portal rust
 
 cargo build --release --locked
@@ -81,77 +86,101 @@ install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 
 | Perintah | Aksi |
 |---|---|
-| `radial-deck --hidden` | Mulai tersembunyi di tray (untuk autostart) |
-| `radial-deck --show` | Langsung tampilkan overlay |
-| `radial-deck --manage` | Buka jendela manajemen folder |
-| `radial-deck --settings` | Buka pengaturan |
+| `radial-deck FILE...` | Buka roda konversi untuk file/drag selection |
+| `radial-deck --show` | Buka roda konversi kosong |
+| `radial-deck --hidden` | Mulai tersembunyi di tray (autostart) |
+| `radial-deck --manage` | Jendela manajemen folder proyek |
+| `radial-deck --settings` | Pengaturan hotkey, autostart, tema |
 | `radial-deck --reset-config` | Hapus konfigurasi dan mulai ulang |
-| `radial-deck --version` | Cetak versi |
-| `radial-deck --help` | Cetak bantuan |
+| `radial-deck --version` / `--help` | Versi / bantuan |
 
-### Shortcut default
+### Shortcut & interaksi roda
 
 | Tombol | Aksi |
 |---|---|
-| `Ctrl+Alt+Space` | Toggle overlay (global, via portal) |
-| Ketik huruf | Filter folder |
-| `1`–`9` | Buka folder ke-N |
-| `Enter` | Buka folder terpilih |
-| `Ctrl+Enter` | Buka terminal di folder |
-| `Tab` / `← →` | Ganti project |
-| `Esc` | Tutup overlay / hapus query |
+| `Ctrl+Alt+Space` | Toggle roda konversi (global) |
+| Panah / scroll | Pilih format |
+| `1`–`9` | Jalankan format ke-N |
+| `Enter` | Terapkan format terpilih |
+| `Esc` / klik area gelap | Tutup roda |
+| Drag file ke panel | Ganti sumber, kategori mengikuti file pertama |
+| Tab kategori | Ganti target; sumber yang tidak cocok ditandai |
 
-### Menambah folder
+Konversi berjalan di thread terpisah; roda langsung tertutup dan hasil ditulis **di
+folder yang sama** dengan file asli (nama bentrok tidak pernah ditimpa). Notifikasi
+menampilkan ringkasan sukses/gagal.
 
-1. Buka tray → **Manage Folders**, atau `radial-deck --manage`
-2. Drag-drop folder ke jendela, atau klik **+ Add Folder**
-3. Folder langsung tersedia di overlay
+### Format
+
+| Kategori | Target |
+|---|---|
+| Images | JPG, PNG, WEBP, HEIC, TIFF, AVIF, BMP, PDF |
+| Video | MP4, MOV, MKV, WEBM, AVI, GIF, WMV |
+| Audio | MP3, M4A, WAV, FLAC, OGG, OPUS, AIFF, WMA |
+| PDF | DOCX, PPTX, XLSX, JPG, PNG, EPUB, TXT, MD |
+| Documents | PDF, DOCX, ODT, TXT, MD, EPUB, HTML, RTF |
+| Slides | PDF, PPTX, ODP, JPG, PNG |
+| Spreadsheets | PDF, XLSX, ODS, CSV, TSV |
+| EPUB | PDF, HTML, DOCX, MD, TXT |
+| Subtitles | SRT, VTT, TXT |
+| Archives | ZIP, TAR, GZIP, EXTRACT |
+
+Beberapa target memerlukan tool eksternal; roda menampilkan alasan bila tidak tersedia.
+
+### Folder proyek
+
+Tray → **Manage Folders** (`--manage`): tambah folder lewat drag-drop atau file chooser.
+Roda folder mendukung filter real-time, `1`–`9`, `Ctrl+Enter` (terminal), klik tengah
+(salin path), dan `Tab`/panah untuk ganti project.
 
 ---
 
 ## Konfigurasi
 
-File: `$XDG_CONFIG_HOME/radial-deck/config.json` (default `~/.config/radial-deck/config.json`)
-
-Ditulis otomatis; tidak perlu edit manual. Lihat
-[`crates/deck-core/src/config.rs`](crates/deck-core/src/config.rs) untuk skema.
+Folder: `$XDG_CONFIG_HOME/radial-deck/config.json` (default `~/.config/radial-deck/config.json`).
+Ditulis otomatis dan atomik; tidak perlu edit manual. Path konversi tidak disimpan.
 
 ---
 
 ## Arsitektur
 
-Lihat [`docs/architecture.md`](docs/architecture.md) untuk diagram lengkap, model
-threading, keputusan keamanan, dan rencana port Windows/macOS.
-
-```
+```text
 crates/
-├── deck-core/          # model, pencarian, persistensi — tanpa UI
-└── radial-deck/        # shell Linux: GTK4, layer-shell, portal, tray
+├── deck-core/                 # tanpa UI: model folder, search, store, konversi
+│   └── src/convert/
+│       ├── registry.rs        # kategori, target, availability, tool detection
+│       ├── image.rs           # native image + ImageMagick
+│       ├── external.rs        # ffmpeg, pdftoppm, LibreOffice, pandoc
+│       ├── archive.rs         # zip/tar/gzip
+│       └── mod.rs             # orkestrasi batch + Outcome
+└── radial-deck/               # shell Linux
     └── src/
-        ├── wheel.rs    # drawing Cairo, hit-test, keyboard
-        ├── manage.rs   # jendela CRUD project/folder
-        ├── settings.rs # hotkey portal, autostart, tema
-        ├── hotkey.rs   # GlobalShortcuts portal (tokio)
-        ├── tray.rs     # StatusNotifierItem (ksni)
-        └── actions.rs  # xdg-open, terminal, clipboard
+        ├── action_wheel.rs    # roda konversi Cairo: gambar, hit-test, input
+        ├── action_launcher.rs # panel overlay, tab kategori, drag & drop
+        ├── controller.rs      # state, CLI single-instance, thread konversi
+        ├── launcher.rs        # roda folder proyek
+        ├── wheel.rs           # roda folder (Cairo)
+        ├── manage.rs / settings.rs / hotkey.rs / tray.rs
+        └── theme.rs           # CSS, deteksi dark KDE/GTK
 ```
+
+Diagram lengkap, threading, dan keputusan keamanan: [`docs/architecture.md`](docs/architecture.md).
+Riset dan perbandingan stack: [`docs/research.md`](docs/research.md).
 
 ---
 
 ## Pengembangan
 
 ```bash
-# lint
-cargo fmt --all && cargo clippy --all-targets -- -D warnings
-
-# test (headless, tanpa display)
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
 cargo test --all
 
-# run debug
-cargo run -p radial-deck -- --show
+# jalankan versi debug
+cargo run -p radial-deck -- --show /path/ke/file.png
 ```
 
-CI otomatis berjalan di GitHub Actions untuk setiap push dan PR ke `main`.
+CI menjalankan fmt, clippy, test, dan build release di Ubuntu 24.04.
 
 ---
 
@@ -159,32 +188,39 @@ CI otomatis berjalan di GitHub Actions untuk setiap push dan PR ke `main`.
 
 | Test | Hasil |
 |---|---|
-| Unit test (23) | ✅ semua lulus |
-| Layer-shell overlay fullscreen | ✅ screenshot KDE Wayland |
-| Keyboard search | ✅ filter + query real-time |
-| Tab project cycling | ✅ warna center berubah |
-| Config persistence | ✅ bertahan lintas proses |
-| Global hotkey `Ctrl+Alt+Space` | ✅ membuka overlay (diverifikasi end-to-end) |
-| Manage & Settings window | ✅ dirender tanpa panic |
-| Idle RAM (release) | ~48 MB RSS |
-| Binary size | 4.3 MB stripped |
+| Unit test | ✅ 41 lulus (`deck-core` 38, app 3) |
+| fmt + clippy `-D warnings` | ✅ bersih |
+| Layer-shell roda konversi | ✅ screenshot KDE Wayland |
+| PNG → JPG via klik roda | ✅ file JPEG 1200×800 valid |
+| WAV → MP3 via klik roda | ✅ MP3 1 detik, ffprobe valid |
+| Arsip: ZIP/TAR/GZIP (file & folder), extract | ✅ smoke test engine + klik GZIP di roda |
+| Hotkey global | ✅ `Ctrl+Alt+Space` membuka panel |
+| Single instance + argumen file | ✅ proses kedua meneruskan file ke proses utama |
+| Dismiss `Esc` / klik luar | ✅ diverifikasi diff screenshot |
+| Idle RAM (release, hidden) | ~25 MB PSS / ~48 MB RSS (mayoritas shared GTK) |
+| Binary release (stripped) | 6.3 MB |
 
 ---
 
-### Catatan hotkey
+## Keterbatasan
 
-Saat pertama kali dijalankan, KDE menampilkan dialog *Global Shortcuts Requested*;
-klik **OK** sekali. Jika shortcut pernah ditolak, baris `toggle` di
-`~/.config/kglobalshortcutsrc` berisi `none` — buka **Settings → Change Shortcut…**
-untuk mengikat ulang lewat System Settings, atau hapus section
-`[io.github.raihan.RadialDeck]` dari file tersebut lalu jalankan ulang aplikasi.
-Aplikasi akan menampilkan peringatan bila portal mengembalikan binding kosong.
+- Posisi panel di tengah output; Wayland tidak mengekspos posisi kursor global.
+- Shortcut dipegang portal sehingga butuh persetujuan KDE satu kali.
+- Konversi memerlukan tool eksternal; Flatpak sandbox belum dapat memakai binary host
+  (manifest masih WIP, lihat `packaging/flatpak/`).
+- File tools Tangerine (crop, trim, merge, dll.) belum diimplementasikan; fokus tahap ini
+  adalah konversi format dan aksi arsip.
+
+---
 
 ## Langkah Berikutnya
 
-- **Windows:** ganti layer-shell → Win32 topmost window; global hotkey via `RegisterHotKey`; tray via systray. Core crate tidak perlu diubah.
-- **macOS:** ganti → `NSPanel`; hotkey via Carbon/AppKit; tray via `NSStatusItem`. Lihat referensi ProjectDeck.
-- **Flatpak:** manifest tersedia di `packaging/flatpak/` (WIP — perlu `cargo-sources.json`).
+- **Windows:** core tetap; ganti layer-shell → Win32 topmost overlay; hotkey
+  `RegisterHotKey`; konverter lewat ImageMagick/ffmpeg yang di-bundle.
+- **macOS:** `NSPanel` + Carbon hotkey + `NSStatusItem`; konversi lewat `sips`/AVFoundation
+  atau tool yang di-bundle.
+- **File tools:** crop/trim/merge/compress dengan preview sebelum eksekusi.
+- **Flatpak:** bundle konverter ke runtime atau gunakan `flatpak-spawn --host` dengan izin.
 
 ---
 
@@ -192,6 +228,6 @@ Aplikasi akan menampilkan peringatan bila portal mengembalikan binding kosong.
 
 MIT — lihat [LICENSE](LICENSE).
 
-Referensi: [Tangerine](https://tangerineformac.com/) (produk, UX),
+Referensi: [Tangerine](https://tangerineformac.com/) (produk/UX),
 [ProjectDeck](https://github.com/nizar268/Shortcut-Floating) (arsitektur macOS).
 Tidak ada kode yang disalin dari keduanya.
