@@ -345,17 +345,17 @@ fn emit(handlers: &HandlerSlot, event: WheelEvent) {
     }
 }
 
-struct Palette {
-    ring_inner: (f64, f64, f64),
-    ring_outer: (f64, f64, f64),
-    text: (f64, f64, f64),
-    muted: (f64, f64, f64),
-    center: (f64, f64, f64),
-    rim: (f64, f64, f64),
-    shadow_alpha: f64,
+pub(crate) struct Palette {
+    pub(crate) ring_inner: (f64, f64, f64),
+    pub(crate) ring_outer: (f64, f64, f64),
+    pub(crate) text: (f64, f64, f64),
+    pub(crate) muted: (f64, f64, f64),
+    pub(crate) center: (f64, f64, f64),
+    pub(crate) rim: (f64, f64, f64),
+    pub(crate) shadow_alpha: f64,
 }
 
-fn palette(dark: bool) -> Palette {
+pub(crate) fn palette(dark: bool) -> Palette {
     if dark {
         Palette {
             ring_inner: (0.235, 0.235, 0.247),

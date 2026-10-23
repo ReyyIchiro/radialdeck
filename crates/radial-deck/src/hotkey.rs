@@ -6,12 +6,45 @@ use futures_util::StreamExt;
 
 use crate::APP_ID;
 
+pub const QUICK_ID: &str = "toggle";
+pub const PROJECTS_ID: &str = "projects";
+
 #[derive(Debug, Clone)]
 pub enum HotkeyEvent {
-    Activated,
+    Activated(String),
     /// The portal's human-readable description of the active binding.
-    Bound(String),
-    Error(String),
+    Bound {
+        id: String,
+        description: String,
+    },
+    Error {
+        id: String,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct Bindings {
+    quick: String,
+    projects: String,
+}
+
+impl Bindings {
+    fn preferred(&self, id: &str) -> &str {
+        if id == PROJECTS_ID {
+            &self.projects
+        } else {
+            &self.quick
+        }
+    }
+
+    fn label(id: &str) -> &'static str {
+        if id == PROJECTS_ID {
+            "project folders"
+        } else {
+            "quick actions"
+        }
+    }
 }
 
 /// Owns the portal session. Dropping it stops the worker thread's channels;
@@ -20,8 +53,13 @@ pub struct HotkeyService {
     configure_tx: async_channel::Sender<()>,
 }
 
-pub fn start(preferred: String, events: async_channel::Sender<HotkeyEvent>) -> HotkeyService {
+pub fn start(
+    quick: String,
+    projects: String,
+    events: async_channel::Sender<HotkeyEvent>,
+) -> HotkeyService {
     let (configure_tx, configure_rx) = async_channel::unbounded();
+    let bindings = Bindings { quick, projects };
 
     let thread = std::thread::Builder::new()
         .name("hotkey-portal".into())
@@ -32,13 +70,15 @@ pub fn start(preferred: String, events: async_channel::Sender<HotkeyEvent>) -> H
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
-                    let _ = events.send_blocking(HotkeyEvent::Error(format!(
-                        "cannot start async runtime: {error}"
-                    )));
+                    send_error(
+                        &events,
+                        "all",
+                        format!("cannot start async runtime: {error}"),
+                    );
                     return;
                 }
             };
-            runtime.block_on(run(preferred, events, configure_rx));
+            runtime.block_on(run(bindings, events, configure_rx));
         });
 
     if let Err(error) = thread {
@@ -73,18 +113,18 @@ async fn register_host_app(connection: &ashpd::zbus::Connection) -> ashpd::zbus:
 }
 
 async fn run(
-    preferred: String,
+    bindings: Bindings,
     events: async_channel::Sender<HotkeyEvent>,
     configure_rx: async_channel::Receiver<()>,
 ) {
     let connection = match ashpd::zbus::Connection::session().await {
         Ok(connection) => connection,
         Err(error) => {
-            let _ = events
-                .send(HotkeyEvent::Error(format!(
-                    "cannot connect to the session bus: {error}"
-                )))
-                .await;
+            send_error(
+                &events,
+                "all",
+                format!("cannot connect to the session bus: {error}"),
+            );
             return;
         }
     };
@@ -96,11 +136,11 @@ async fn run(
     let portal = match GlobalShortcuts::with_connection(connection).await {
         Ok(portal) => portal,
         Err(error) => {
-            let _ = events
-                .send(HotkeyEvent::Error(format!(
-                    "GlobalShortcuts portal unavailable: {error}"
-                )))
-                .await;
+            send_error(
+                &events,
+                "all",
+                format!("GlobalShortcuts portal unavailable: {error}"),
+            );
             return;
         }
     };
@@ -108,61 +148,40 @@ async fn run(
     let session = match portal.create_session(CreateSessionOptions::default()).await {
         Ok(session) => session,
         Err(error) => {
-            let _ = events
-                .send(HotkeyEvent::Error(format!(
-                    "cannot create shortcut session: {error}"
-                )))
-                .await;
+            send_error(
+                &events,
+                "all",
+                format!("cannot create shortcut session: {error}"),
+            );
             return;
         }
     };
 
-    let trigger = if preferred.trim().is_empty() {
-        None
-    } else {
-        Some(preferred.as_str())
-    };
-    let shortcut =
-        NewShortcut::new("toggle", "Show RadialDeck launcher").preferred_trigger(trigger);
+    let shortcuts = [
+        NewShortcut::new(QUICK_ID, "Quick actions (files and archives)")
+            .preferred_trigger(trigger(&bindings.quick)),
+        NewShortcut::new(PROJECTS_ID, "Project folders")
+            .preferred_trigger(trigger(&bindings.projects)),
+    ];
     let request = match portal
-        .bind_shortcuts(&session, &[shortcut], None, BindShortcutsOptions::default())
+        .bind_shortcuts(&session, &shortcuts, None, BindShortcutsOptions::default())
         .await
     {
         Ok(request) => request,
         Err(error) => {
-            let _ = events
-                .send(HotkeyEvent::Error(format!("cannot bind shortcut: {error}")))
-                .await;
+            send_error(&events, "all", format!("cannot bind shortcuts: {error}"));
             return;
         }
     };
 
     match request.response() {
-        Ok(bound) => {
-            let description = bound
-                .shortcuts()
-                .first()
-                .map(|shortcut| shortcut.trigger_description().to_string())
-                .unwrap_or_default();
-            if description.is_empty() {
-                // KDE keeps previously denied bindings around: BindShortcuts
-                // succeeds but without a trigger, so nothing is grabbed.
-                let _ = events
-                    .send(HotkeyEvent::Error(format!(
-                        "no shortcut assigned; use Change Shortcut… to bind {}",
-                        preferred
-                    )))
-                    .await;
-            } else {
-                let _ = events.send(HotkeyEvent::Bound(description)).await;
-            }
-        }
+        Ok(bound) => report_shortcuts(&events, &bindings, bound.shortcuts()),
         Err(error) => {
-            let _ = events
-                .send(HotkeyEvent::Error(format!(
-                    "shortcut was not registered: {error}"
-                )))
-                .await;
+            send_error(
+                &events,
+                "all",
+                format!("shortcuts were not registered: {error}"),
+            );
             return;
         }
     }
@@ -170,11 +189,11 @@ async fn run(
     let mut activated = match portal.receive_activated().await {
         Ok(stream) => stream,
         Err(error) => {
-            let _ = events
-                .send(HotkeyEvent::Error(format!(
-                    "cannot listen for shortcut: {error}"
-                )))
-                .await;
+            send_error(
+                &events,
+                "all",
+                format!("cannot listen for shortcuts: {error}"),
+            );
             return;
         }
     };
@@ -184,10 +203,12 @@ async fn run(
         tokio::select! {
             event = activated.next() => {
                 match event {
-                    Some(event) if event.shortcut_id() == "toggle" => {
-                        let _ = events.send(HotkeyEvent::Activated).await;
+                    Some(event) => {
+                        let id = event.shortcut_id();
+                        if id == QUICK_ID || id == PROJECTS_ID {
+                            let _ = events.send(HotkeyEvent::Activated(id.to_owned())).await;
+                        }
                     }
-                    Some(_) => {}
                     None => break,
                 }
             }
@@ -196,15 +217,20 @@ async fn run(
                     .configure_shortcuts(&session, None, ConfigureShortcutsOptions::default())
                     .await
                 {
-                    let _ = events
-                        .send(HotkeyEvent::Error(format!(
-                            "cannot open shortcut settings: {error}"
-                        )))
-                        .await;
+                    send_error(
+                        &events,
+                        "all",
+                        format!("cannot open shortcut settings: {error}"),
+                    );
                     continue;
                 }
-                if let Ok(updated) = refresh_description(&portal, &session).await {
-                    let _ = events.send(HotkeyEvent::Bound(updated)).await;
+                match list_shortcuts(&portal, &session).await {
+                    Ok(shortcuts) => report_shortcuts(&events, &bindings, &shortcuts),
+                    Err(error) => send_error(
+                        &events,
+                        "all",
+                        format!("cannot refresh shortcuts: {error}"),
+                    ),
                 }
             }
             Some(update) = async {
@@ -213,26 +239,61 @@ async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                if let Some(shortcut) = update.shortcuts().first() {
-                    let _ = events
-                        .send(HotkeyEvent::Bound(shortcut.trigger_description().to_string()))
-                        .await;
-                }
+                report_shortcuts(&events, &bindings, update.shortcuts());
             }
             else => break,
         }
     }
 }
 
-async fn refresh_description(
+fn trigger(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn send_error(events: &async_channel::Sender<HotkeyEvent>, id: &str, message: String) {
+    let _ = events.try_send(HotkeyEvent::Error {
+        id: id.to_owned(),
+        message,
+    });
+}
+
+fn report_shortcuts(
+    events: &async_channel::Sender<HotkeyEvent>,
+    bindings: &Bindings,
+    shortcuts: &[ashpd::desktop::global_shortcuts::Shortcut],
+) {
+    for shortcut in shortcuts {
+        let id = shortcut.id();
+        if id != QUICK_ID && id != PROJECTS_ID {
+            continue;
+        }
+        let description = shortcut.trigger_description().to_string();
+        if description.is_empty() {
+            // KDE keeps previously denied bindings around: BindShortcuts
+            // succeeds but without a trigger, so nothing is grabbed.
+            let _ = events.try_send(HotkeyEvent::Error {
+                id: id.to_owned(),
+                message: format!(
+                    "no shortcut assigned to {}; use Change Shortcuts… to bind {}",
+                    Bindings::label(id),
+                    bindings.preferred(id)
+                ),
+            });
+        } else {
+            let _ = events.try_send(HotkeyEvent::Bound {
+                id: id.to_owned(),
+                description,
+            });
+        }
+    }
+}
+
+async fn list_shortcuts(
     portal: &GlobalShortcuts,
     session: &ashpd::desktop::Session<GlobalShortcuts>,
-) -> Result<String, ashpd::Error> {
+) -> Result<Vec<ashpd::desktop::global_shortcuts::Shortcut>, ashpd::Error> {
     let request = portal.list_shortcuts(session, Default::default()).await?;
     let list = request.response()?;
-    Ok(list
-        .shortcuts()
-        .first()
-        .map(|shortcut| shortcut.trigger_description().to_string())
-        .unwrap_or_default())
+    Ok(list.shortcuts().to_vec())
 }

@@ -15,14 +15,21 @@ pub struct Tray {
     sender: Sender<TrayCommand>,
     pub autostart: bool,
     pub shortcut: String,
+    pub projects_shortcut: String,
 }
 
 impl Tray {
-    pub fn new(sender: Sender<TrayCommand>, autostart: bool, shortcut: String) -> Self {
+    pub fn new(
+        sender: Sender<TrayCommand>,
+        autostart: bool,
+        shortcut: String,
+        projects_shortcut: String,
+    ) -> Self {
         Self {
             sender,
             autostart,
             shortcut,
+            projects_shortcut,
         }
     }
 
@@ -51,7 +58,10 @@ impl ksni::Tray for Tray {
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
             title: "RadialDeck".into(),
-            description: format!("Quick actions: {}", self.shortcut),
+            description: format!(
+                "Quick actions: {}\nProject folders: {}",
+                self.shortcut, self.projects_shortcut
+            ),
             ..Default::default()
         }
     }
@@ -68,6 +78,7 @@ impl ksni::Tray for Tray {
             .into(),
             StandardItem {
                 label: "Project Folders…".into(),
+                shortcut: vec![shortcut_keys(&self.projects_shortcut)],
                 activate: Box::new(|tray: &mut Tray| tray.send(TrayCommand::Projects)),
                 ..Default::default()
             }

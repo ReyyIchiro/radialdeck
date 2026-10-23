@@ -23,6 +23,7 @@ use crate::wheel::{Action, Intent, WheelData, WheelFolder};
 pub struct Cli {
     pub hidden: bool,
     pub show: bool,
+    pub projects: bool,
     pub manage: bool,
     pub settings: bool,
     pub reset: bool,
@@ -38,6 +39,7 @@ impl Cli {
             match arg.as_str() {
                 "--hidden" => cli.hidden = true,
                 "--show" => cli.show = true,
+                "--projects" | "--folders" => cli.projects = true,
                 "--manage" => cli.manage = true,
                 "--settings" => cli.settings = true,
                 "--reset-config" => cli.reset = true,
@@ -53,8 +55,10 @@ impl Cli {
 
 #[derive(Default)]
 pub struct HotkeyState {
-    pub effective: String,
-    pub error: Option<String>,
+    pub quick: String,
+    pub projects: String,
+    pub quick_error: Option<String>,
+    pub projects_error: Option<String>,
 }
 
 pub struct Controller {
@@ -188,6 +192,7 @@ impl Controller {
             tx,
             self.config.borrow().preferences.launch_at_login,
             self.display_shortcut(),
+            self.display_projects_shortcut(),
         );
         use ksni::blocking::TrayMethods;
         match tray.spawn() {
@@ -219,8 +224,14 @@ impl Controller {
 
     fn start_hotkey(self: &Rc<Self>) {
         let (tx, rx) = async_channel::unbounded();
-        let preferred = self.config.borrow().preferences.hotkey.clone();
-        let service = hotkey::start(preferred, tx);
+        let (quick, projects) = {
+            let config = self.config.borrow();
+            (
+                config.preferences.hotkey.clone(),
+                config.preferences.projects_hotkey.clone(),
+            )
+        };
+        let service = hotkey::start(quick, projects, tx);
         *self.hotkey.borrow_mut() = Some(service);
 
         let controller = Rc::downgrade(self);
@@ -230,39 +241,92 @@ impl Controller {
                     break;
                 };
                 match event {
-                    HotkeyEvent::Activated => controller.toggle_actions(),
-                    HotkeyEvent::Bound(description) => {
-                        controller.hotkey_state.borrow_mut().effective = description.clone();
-                        controller.hotkey_state.borrow_mut().error = None;
-                        if let Some(settings) = controller.settings.borrow().as_ref() {
-                            settings.refresh();
+                    HotkeyEvent::Activated(id) => {
+                        if id == hotkey::PROJECTS_ID {
+                            controller.toggle_launcher();
+                        } else {
+                            controller.toggle_actions();
                         }
-                        controller.update_tray();
-                        tracing::info!("global shortcut active: {description}");
                     }
-                    HotkeyEvent::Error(error) => {
-                        controller.hotkey_state.borrow_mut().error = Some(error.clone());
-                        if let Some(settings) = controller.settings.borrow().as_ref() {
-                            settings.refresh();
-                        }
-                        tracing::warn!("global shortcut error: {error}");
+                    HotkeyEvent::Bound { id, description } => {
+                        controller.update_hotkey_state(&id, Ok(description));
+                        tracing::info!(
+                            "shortcut {id} active: {}",
+                            controller.display_shortcut_for(&id)
+                        );
+                    }
+                    HotkeyEvent::Error { id, message } => {
+                        controller.update_hotkey_state(&id, Err(message));
+                        tracing::warn!(
+                            "shortcut {id} error: {}",
+                            controller.hotkey_error_for(&id).unwrap_or_default()
+                        );
                     }
                 }
             }
         });
     }
 
+    fn update_hotkey_state(&self, id: &str, result: Result<String, String>) {
+        {
+            let mut state = self.hotkey_state.borrow_mut();
+            match (id, result) {
+                (hotkey::PROJECTS_ID, Ok(description)) => {
+                    state.projects = description;
+                    state.projects_error = None;
+                }
+                (hotkey::PROJECTS_ID, Err(error)) => state.projects_error = Some(error),
+                (hotkey::QUICK_ID, Ok(description)) => {
+                    state.quick = description;
+                    state.quick_error = None;
+                }
+                (hotkey::QUICK_ID, Err(error)) => state.quick_error = Some(error),
+                (_, Ok(description)) => {
+                    state.quick = description;
+                    state.quick_error = None;
+                }
+                (_, Err(error)) => {
+                    state.quick_error = Some(error.clone());
+                    state.projects_error = Some(error);
+                }
+            }
+        }
+        if let Some(settings) = self.settings.borrow().as_ref() {
+            settings.refresh();
+        }
+        self.update_tray();
+    }
+
     pub fn display_shortcut(&self) -> String {
+        self.display_shortcut_for(hotkey::QUICK_ID)
+    }
+
+    pub fn display_projects_shortcut(&self) -> String {
+        self.display_shortcut_for(hotkey::PROJECTS_ID)
+    }
+
+    fn display_shortcut_for(&self, id: &str) -> String {
         let state = self.hotkey_state.borrow();
-        if state.effective.is_empty() {
+        if id == hotkey::PROJECTS_ID {
+            if state.projects.is_empty() {
+                deck_core::config::pretty_hotkey(&self.config.borrow().preferences.projects_hotkey)
+            } else {
+                state.projects.clone()
+            }
+        } else if state.quick.is_empty() {
             deck_core::config::pretty_hotkey(&self.config.borrow().preferences.hotkey)
         } else {
-            state.effective.clone()
+            state.quick.clone()
         }
     }
 
-    pub fn hotkey_error(&self) -> Option<String> {
-        self.hotkey_state.borrow().error.clone()
+    pub fn hotkey_error_for(&self, id: &str) -> Option<String> {
+        let state = self.hotkey_state.borrow();
+        if id == hotkey::PROJECTS_ID {
+            state.projects_error.clone()
+        } else {
+            state.quick_error.clone()
+        }
     }
 
     pub fn configure_hotkey(&self) {
@@ -284,6 +348,7 @@ impl Controller {
             project_color: project.color.clone(),
             project_total: config.projects.len(),
             project_index: index,
+            shortcut: self.display_projects_shortcut(),
             folders: project
                 .folders
                 .iter()
@@ -304,7 +369,14 @@ impl Controller {
     }
 
     pub fn show_launcher(self: &Rc<Self>) {
-        if self.launcher.borrow().is_none() {
+        self.hide_actions();
+        let recreate = self
+            .launcher
+            .borrow()
+            .as_ref()
+            .is_none_or(Launcher::is_destroyed);
+        if recreate {
+            *self.launcher.borrow_mut() = None;
             let Some(app) = self.app.borrow().clone() else {
                 return;
             };
@@ -322,13 +394,36 @@ impl Controller {
         }
     }
 
+    pub fn toggle_launcher(self: &Rc<Self>) {
+        let visible = self
+            .launcher
+            .borrow()
+            .as_ref()
+            .is_some_and(Launcher::is_visible);
+        tracing::debug!("toggle project folders: visible={visible}");
+        if visible {
+            self.hide_launcher();
+        } else {
+            self.show_launcher();
+        }
+    }
+
     pub fn open_manage(self: &Rc<Self>) {
         self.hide_launcher();
+        self.hide_actions();
         if self.manage.borrow().is_none() {
             let Some(app) = self.app.borrow().clone() else {
                 return;
             };
-            *self.manage.borrow_mut() = Some(ManageWindow::new(&app, Rc::downgrade(self)));
+            let manage = ManageWindow::new(&app, Rc::downgrade(self));
+            let window = manage.window().clone();
+            *self.manage.borrow_mut() = Some(manage);
+            let weak = Rc::downgrade(self);
+            window.connect_destroy(move |_| {
+                if let Some(controller) = weak.upgrade() {
+                    controller.manage.borrow_mut().take();
+                }
+            });
         }
         if let Some(manage) = self.manage.borrow().as_ref() {
             manage.refresh();
@@ -338,11 +433,20 @@ impl Controller {
 
     pub fn open_settings(self: &Rc<Self>) {
         self.hide_launcher();
+        self.hide_actions();
         if self.settings.borrow().is_none() {
             let Some(app) = self.app.borrow().clone() else {
                 return;
             };
-            *self.settings.borrow_mut() = Some(SettingsWindow::new(&app, Rc::downgrade(self)));
+            let settings = SettingsWindow::new(&app, Rc::downgrade(self));
+            let window = settings.window().clone();
+            *self.settings.borrow_mut() = Some(settings);
+            let weak = Rc::downgrade(self);
+            window.connect_destroy(move |_| {
+                if let Some(controller) = weak.upgrade() {
+                    controller.settings.borrow_mut().take();
+                }
+            });
         }
         if let Some(settings) = self.settings.borrow().as_ref() {
             settings.refresh();
@@ -472,6 +576,38 @@ impl Controller {
         }
     }
 
+    pub fn rename_folder(&self, project_id: Uuid, folder_id: Uuid, label: &str) {
+        if self
+            .config
+            .borrow_mut()
+            .rename_folder(project_id, folder_id, label)
+        {
+            self.save();
+            self.refresh_launcher();
+            self.refresh_manage();
+        }
+    }
+
+    pub fn set_folder_color(&self, project_id: Uuid, folder_id: Uuid, color: Option<&str>) {
+        if self
+            .config
+            .borrow_mut()
+            .set_folder_color(project_id, folder_id, color)
+        {
+            self.save();
+            self.refresh_launcher();
+            self.refresh_manage();
+        }
+    }
+
+    pub fn set_project_color(&self, id: Uuid, color: &str) {
+        if self.config.borrow_mut().set_project_color(id, color) {
+            self.save();
+            self.refresh_launcher();
+            self.refresh_manage();
+        }
+    }
+
     pub fn add_project(self: &Rc<Self>, name: &str) {
         self.config
             .borrow_mut()
@@ -562,6 +698,20 @@ impl Controller {
         }
     }
 
+    pub fn log_folder(&self) -> Option<PathBuf> {
+        crate::logging::log_dir()
+    }
+
+    pub fn open_log_folder(self: &Rc<Self>) {
+        let Some(dir) = self.log_folder() else {
+            self.alert("Logs unavailable", "No XDG state directory is available.");
+            return;
+        };
+        if let Err(error) = actions::open_folder(&dir) {
+            self.alert("Could not open log folder", &error.to_string());
+        }
+    }
+
     pub fn refresh_manage(&self) {
         if let Some(manage) = self.manage.borrow().as_ref() {
             manage.refresh();
@@ -575,9 +725,11 @@ impl Controller {
         if let Some(tray) = self.tray.borrow().as_ref() {
             let enabled = self.config.borrow().preferences.launch_at_login;
             let shortcut = self.display_shortcut();
+            let projects_shortcut = self.display_projects_shortcut();
             tray.update(|tray| {
                 tray.autostart = enabled;
                 tray.shortcut = shortcut;
+                tray.projects_shortcut = projects_shortcut;
             });
         }
     }
@@ -637,6 +789,8 @@ impl Controller {
             self.open_manage();
         } else if cli.settings {
             self.open_settings();
+        } else if cli.projects {
+            self.show_launcher();
         } else if !cli.files.is_empty() {
             self.show_actions(cli.files);
         } else if cli.show || !cli.hidden {
@@ -648,20 +802,26 @@ impl Controller {
         if self.cli_handled.replace(false) {
             return;
         }
-        // Gaining focus while the wheel is already open must not reset the
+        // Gaining focus while an overlay is already open must not reset the
         // dropped files (a plain click would otherwise clear the selection).
-        let visible = self
+        let actions_visible = self
             .action_launcher
             .borrow()
             .as_ref()
             .is_some_and(ActionLauncher::is_visible);
-        if visible {
+        let folders_visible = self
+            .launcher
+            .borrow()
+            .as_ref()
+            .is_some_and(Launcher::is_visible);
+        if actions_visible || folders_visible {
             return;
         }
         self.show_actions(Vec::new());
     }
 
     pub fn show_actions(self: &Rc<Self>, files: Vec<PathBuf>) {
+        self.hide_launcher();
         let files = normalize_paths(files);
         if let Some(category) = files.first().and_then(|file| category_for(file)) {
             self.action_category.set(category);
@@ -671,7 +831,13 @@ impl Controller {
         *self.action_sources.borrow_mut() = files;
         self.action_status.replace(None);
 
-        if self.action_launcher.borrow().is_none() {
+        let recreate = self
+            .action_launcher
+            .borrow()
+            .as_ref()
+            .is_none_or(ActionLauncher::is_destroyed);
+        if recreate {
+            *self.action_launcher.borrow_mut() = None;
             let Some(app) = self.app.borrow().clone() else {
                 return;
             };

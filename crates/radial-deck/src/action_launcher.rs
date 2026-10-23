@@ -1,5 +1,6 @@
 //! Full-screen overlay that hosts the radial action wheel.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -42,6 +43,8 @@ pub struct ActionLauncher {
     wheel: Rc<ActionWheel>,
     status: gtk::Label,
     footer: gtk::Label,
+    visible: Rc<Cell<bool>>,
+    destroyed: Rc<Cell<bool>>,
 }
 
 impl ActionLauncher {
@@ -166,35 +169,9 @@ impl ActionLauncher {
         root.append(&panel);
         window.set_child(Some(&root));
 
-        {
-            let keys = gtk::EventControllerKey::new();
-            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-            let window_ref = window.clone();
-            keys.connect_key_pressed(move |_keys, keyval, _keycode, _modifiers| {
-                if keyval == gdk::Key::Escape {
-                    window_ref.set_visible(false);
-                    glib::Propagation::Stop
-                } else {
-                    glib::Propagation::Proceed
-                }
-            });
-            window.add_controller(keys);
-        }
-
-        {
-            // Clicks on the dimmed area around the panel dismiss the wheel.
-            let click = gtk::GestureClick::new();
-            click.set_propagation_phase(gtk::PropagationPhase::Capture);
-            let root_ref = root.clone();
-            click.connect_pressed(move |_gesture, _n, x, y| {
-                let picked = root_ref.pick(x, y, gtk::PickFlags::DEFAULT);
-                if picked.as_ref().is_none_or(|widget| widget == &root_ref) {
-                    root_ref.set_visible(false);
-                }
-            });
-            root.add_controller(click);
-        }
-
+        // Dismissal is owned by the controller. Do not hide the window or the
+        // root widget directly here: a hidden-but-mapped overlay makes the
+        // next global-shortcut press toggle stale state instead of opening.
         // Dropping a file anywhere on the panel feeds the wheel.
         install_drop_target(&panel, wheel.clone(), handler.clone(), true);
         install_drop_target(&wheel.area, wheel.clone(), handler.clone(), false);
@@ -238,10 +215,24 @@ impl ActionLauncher {
         }
         window.add_controller(keys);
 
-        window.connect_close_request(|window| {
-            window.set_visible(false);
-            glib::Propagation::Stop
-        });
+        let visible = Rc::new(Cell::new(false));
+        let destroyed = Rc::new(Cell::new(false));
+        {
+            let visible = visible.clone();
+            window.connect_close_request(move |window| {
+                window.set_visible(false);
+                visible.set(false);
+                glib::Propagation::Stop
+            });
+        }
+        {
+            let visible = visible.clone();
+            let destroyed = destroyed.clone();
+            window.connect_destroy(move |_| {
+                visible.set(false);
+                destroyed.set(true);
+            });
+        }
 
         Self {
             window,
@@ -252,6 +243,8 @@ impl ActionLauncher {
             wheel,
             status,
             footer,
+            visible,
+            destroyed,
         }
     }
 
@@ -296,21 +289,44 @@ impl ActionLauncher {
     }
 
     pub fn present(&self) {
+        if self.destroyed.get() {
+            tracing::warn!("action overlay was destroyed; refusing to present");
+            return;
+        }
         self.apply_theme();
+        self.visible.set(true);
+        self.window.set_visible(true);
         self.window.present();
         self.wheel.focus();
         let wheel = self.wheel.area.clone();
+        let window = self.window.clone();
+        let visible = self.visible.clone();
         glib::idle_add_local_once(move || {
             wheel.grab_focus();
+        });
+        // Layer-shell surfaces occasionally miss the first present after a
+        // rapid hide/show cycle. Verify the map and retry once.
+        let window = window.clone();
+        let visible = visible.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+            if visible.get() && !window.is_mapped() {
+                tracing::warn!("action overlay was not mapped; presenting again");
+                window.present();
+            }
         });
     }
 
     pub fn hide(&self) {
+        self.visible.set(false);
         self.window.set_visible(false);
     }
 
     pub fn is_visible(&self) -> bool {
-        self.window.is_visible()
+        self.visible.get() && !self.destroyed.get()
+    }
+
+    pub fn is_destroyed(&self) -> bool {
+        self.destroyed.get()
     }
 }
 

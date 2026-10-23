@@ -50,6 +50,11 @@ window.rd-dialog {
     padding: 12px;
     background: alpha(currentColor, 0.04);
 }
+.rd-color-selected {
+    border: 2px solid currentColor;
+    border-radius: 8px;
+    padding: 2px;
+}
 .rd-footer {
     font-size: 11px;
     opacity: 0.6;
