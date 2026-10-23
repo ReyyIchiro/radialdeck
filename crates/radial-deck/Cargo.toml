@@ -1,0 +1,28 @@
+[package]
+name = "radial-deck"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Radial folder launcher for the Linux desktop"
+default-run = "radial-deck"
+
+[[bin]]
+name = "radial-deck"
+path = "src/main.rs"
+
+[dependencies]
+deck-core = { path = "../deck-core" }
+gtk = { package = "gtk4", version = "0.11.5", features = ["v4_16"] }
+gtk4-layer-shell = "0.8.1"
+ashpd = { version = "0.13.13", features = ["global_shortcuts"] }
+ksni = { version = "0.3.7", features = ["blocking"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+async-channel = "2.5.0"
+notify-rust = "4.18.2"
+futures-util = "0.3.32"
+pangocairo = "0.22.9"
+uuid.workspace = true
+directories.workspace = true
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
