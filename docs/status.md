@@ -29,13 +29,17 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 |---|---|
 | `cargo fmt --all` | bersih |
 | `cargo clippy --workspace --all-targets -- -D warnings` | bersih |
-| `cargo test --workspace` | 43 lulus (40 core + 3 app) |
+| `cargo test --workspace` | 45 lulus (40 core + 5 app) |
 | `cargo build --release --locked` | lulus |
 | Dua shortcut portal | `Ctrl+Alt+Space` → quick actions, `Ctrl+Alt+P` → project folders |
 | Klik luar lalu satu kali hotkey | membuka overlay kembali (regresi fixed) |
 | `Esc`, klik luar, hotkey toggle | state controller dan window konsisten |
-| Roda folder satu item | kartu + panel kompak, label tidak terpotong |
-| Manage 3 project / 3 folder | warna, rename, tambah folder, badge missing tampil benar |
+| Roda folder satu item | target cincin penuh, label tidak terpotong |
+| Rail project | 5 tab + overflow `+3`; tab aktif dan fokus keyboard terlihat |
+| Tab dari roda | fokus pindah ke tab pertama, border fokus putih tampil |
+| Escape saat query aktif | query dibersihkan; Escape berikutnya menutup overlay |
+| Salin path | `Shift+Enter` menyalin `/tmp` ke clipboard |
+| Manage 8 project / 4 folder | rail, warna, rename, tambah folder, urutan, badge missing |
 | Rename project | dialog, Enter, config tersimpan, status “Project renamed” |
 | Project color | popover 12 warna, pilihan tersimpan ke config |
 | Add folder | chooser native, path tersimpan, status “Folder added” |
@@ -57,8 +61,15 @@ tidak ada perubahan pada `deck-core::convert`.
   root/window secara langsung tanpa memperbarui state controller.
 - Overlay kini punya flag visibilitas eksplisit, recreation bila window destroyed, verifikasi
   map + retry, dan mutual exclusion antar-overlay.
-- Roda folder memakai panel `.rd-panel` + palet roda konversi; single-folder menjadi kartu
-  (judul project, badge, warna, alasan folder hilang), bukan cincin kosong.
+- Roda folder memakai panel `.rd-panel` + palet roda konversi; single-folder menjadi satu
+  target cincin penuh (bukan kartu), dengan alasan folder hilang di tengah.
+- Rail project baru: maksimal lima tab, project aktif selalu terlihat, sisanya di menu `+N`;
+  tab aktif memakai border oranye, fokus keyboard memakai border putih.
+- `Tab` dari roda memindahkan fokus ke tab pertama; `Enter` memilih project. Escape saat
+  query aktif membersihkan query lebih dulu.
+- Label wedge ditempatkan di tengah ring dengan font samping lebih kecil; tidak lagi
+  menabrak pusat atau tepi luar.
+- Klik tengah wedge menyalin path; pusat membuka Manage (atau folder saat hanya satu).
 - Renderer Cairo dipaksa sebelum GTK init; RSS window pertama turun dari ~115 MB ke ~68 MB
   tanpa ketergantungan GPU. `GSK_RENDERER` tetap bisa di-override.
 - Window manage/settings dihancurkan saat ditutup agar widget tree dilepas; overlay roda
@@ -72,7 +83,10 @@ tidak ada perubahan pada `deck-core::convert`.
 ## Known issues / batasan
 
 - Wayland tidak memberi posisi kursor global; panel selalu di tengah output aktif.
-- X11 fallback belum memposisikan overlay di kursor (jendela biasa).
+- X11 fallback belum memposisikan overlay di kursor (jendela biasa); posisi overlay
+  bergantung pada window manager.
+- GTK masih mencatat warning `slider min width -2` saat window Manage dibuka; berasal dari
+  tema sistem, bukan CSS aplikasi.
 - Flatpak masih WIP; konverter host belum diakses dari sandbox.
 - File tools Tangerine (crop/trim/split/merge/compress dengan preview) belum ada.
 - Windows dan macOS belum diimplementasikan; lihat `docs/roadmap.md`.

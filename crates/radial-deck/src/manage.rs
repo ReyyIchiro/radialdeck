@@ -1,27 +1,17 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
+use crate::actions;
+use crate::controller::Controller;
+use crate::project_tabs::ProjectTabs;
+use crate::wheel::{Intent, ProjectTab};
+use crate::widgets::color_dot;
 use deck_core::{Availability, Folder};
 use gtk::gdk;
 use gtk::gio;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
-
-use crate::actions;
-use crate::controller::Controller;
-use crate::theme;
-use crate::wheel::Intent;
-
-struct ManageButtons<'a> {
-    settings: &'a gtk::Button,
-    add_folder: &'a gtk::Button,
-    open_wheel: &'a gtk::Button,
-    add_project: &'a gtk::Button,
-    rename_project: &'a gtk::Button,
-    delete_project: &'a gtk::Button,
-    project_color: &'a gtk::Button,
-}
 
 struct FolderRowContext<'a> {
     window: &'a gtk::ApplicationWindow,
@@ -35,12 +25,13 @@ struct FolderRowContext<'a> {
 
 pub struct ManageWindow {
     window: gtk::ApplicationWindow,
-    projects: gtk::ListBox,
+    tabs: ProjectTabs,
     folders: gtk::ListBox,
     heading: gtk::Label,
     subtitle: gtk::Label,
     status: gtk::Label,
     project_color_button: gtk::Button,
+    project_menu_button: gtk::MenuButton,
     delete_project: gtk::Button,
     controller: Weak<Controller>,
     refreshing: Cell<bool>,
@@ -50,101 +41,132 @@ impl ManageWindow {
     pub fn new(app: &gtk::Application, controller: Weak<Controller>) -> Self {
         let window = gtk::ApplicationWindow::builder()
             .application(app)
-            .title("RadialDeck — Folders")
+            .title("RadialDeck: Project Folders")
             .default_width(900)
             .default_height(640)
             .build();
         window.add_css_class("rd-dialog");
+        window.add_css_class("rd-manage-window");
 
         let header = gtk::HeaderBar::new();
-        let title = gtk::Label::new(Some("Folders"));
+        let title = gtk::Label::new(Some("Project Folders"));
         title.add_css_class("rd-title");
         header.set_title_widget(Some(&title));
 
         let settings_button = gtk::Button::with_label("Settings");
+        settings_button.add_css_class("flat");
         header.pack_end(&settings_button);
-        let add_button = gtk::Button::with_label("Add Folder");
-        add_button.add_css_class("suggested-action");
-        header.pack_end(&add_button);
         let open_wheel = gtk::Button::with_label("Open Wheel");
+        open_wheel.add_css_class("flat");
         open_wheel.set_tooltip_text(Some("Show the project-folder wheel"));
         header.pack_end(&open_wheel);
 
-        let projects = gtk::ListBox::new();
-        projects.set_selection_mode(gtk::SelectionMode::Single);
-        projects.add_css_class("navigation-sidebar");
-        let projects_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .child(&projects)
-            .build();
+        let tabs = ProjectTabs::new();
+        {
+            let target = controller.clone();
+            tabs.set_handler(Rc::new(move |id| {
+                if let Some(controller) = target.upgrade() {
+                    controller.set_active_project(id);
+                }
+            }));
+        }
+        let add_project = icon_button("list-add-symbolic", "New project");
+        add_project.add_css_class("rd-tab-add");
+        let rail = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        rail.set_halign(gtk::Align::Start);
+        rail.append(&tabs.container);
+        rail.append(&add_project);
+        let rail_row = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        rail_row.set_margin_top(18);
+        rail_row.set_margin_bottom(6);
+        rail_row.set_margin_start(20);
+        rail_row.set_margin_end(20);
+        rail_row.append(&rail);
+
+        let heading = gtk::Label::new(None);
+        heading.add_css_class("rd-manage-heading");
+        heading.set_halign(gtk::Align::Start);
+        heading.set_hexpand(true);
+        heading.set_ellipsize(pango::EllipsizeMode::End);
+        heading.set_max_width_chars(42);
+        let project_color_button = gtk::Button::new();
+        project_color_button.add_css_class("flat");
+        project_color_button.add_css_class("rd-icon-button");
+        project_color_button.set_child(Some(&color_dot("#3b82f6", 18)));
+        project_color_button.set_tooltip_text(Some("Choose the project colour"));
+
+        let project_menu_button = gtk::MenuButton::new();
+        project_menu_button.add_css_class("flat");
+        project_menu_button.add_css_class("rd-icon-button");
+        project_menu_button.set_tooltip_text(Some("Project actions"));
+        let menu_icon = gtk::Image::from_icon_name("view-more-symbolic");
+        menu_icon.set_pixel_size(18);
+        project_menu_button.set_child(Some(&menu_icon));
+        let project_popover = gtk::Popover::new();
+        project_popover.add_css_class("rd-menu-popover");
+        let project_menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        project_menu.add_css_class("rd-menu");
+        project_menu.set_margin_top(6);
+        project_menu.set_margin_bottom(6);
+        project_menu.set_margin_start(6);
+        project_menu.set_margin_end(6);
+        let rename_project = menu_item("document-save-as-symbolic", "Rename project…");
+        let delete_project = menu_item("user-trash-symbolic", "Delete project…");
+        delete_project.add_css_class("destructive-action");
+        project_menu.append(&rename_project);
+        project_menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        project_menu.append(&delete_project);
+        project_popover.set_child(Some(&project_menu));
+        project_menu_button.set_popover(Some(&project_popover));
+        project_popover.connect_closed(|popover| popover.unparent());
+
+        let add_folder = gtk::Button::with_label("Add Folder");
+        add_folder.add_css_class("suggested-action");
+        add_folder.set_tooltip_text(Some("Choose a folder to add to this project"));
+
+        let heading_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        heading_row.set_margin_start(20);
+        heading_row.set_margin_end(20);
+        heading_row.set_margin_top(10);
+        heading_row.append(&project_color_button);
+        heading_row.append(&heading);
+        heading_row.append(&project_menu_button);
+        heading_row.append(&add_folder);
+
+        let subtitle = gtk::Label::new(None);
+        subtitle.add_css_class("rd-manage-subtitle");
+        subtitle.set_halign(gtk::Align::Start);
+        subtitle.set_margin_start(46);
+        subtitle.set_margin_end(20);
+        subtitle.set_margin_bottom(4);
 
         let folders = gtk::ListBox::new();
         folders.set_selection_mode(gtk::SelectionMode::None);
         folders.set_activate_on_single_click(false);
-        folders.add_css_class("boxed-list");
+        folders.add_css_class("rd-folder-list");
         let folders_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
+            .margin_start(20)
+            .margin_end(20)
+            .margin_top(6)
             .child(&folders)
             .build();
 
-        let heading = gtk::Label::new(None);
-        heading.add_css_class("rd-title");
-        heading.set_halign(gtk::Align::Start);
-        heading.set_hexpand(true);
-        let project_color_button = gtk::Button::new();
-        project_color_button.add_css_class("flat");
-        project_color_button.set_child(Some(&color_dot("#3b82f6", 18)));
-        project_color_button.set_tooltip_text(Some("Choose the project colour"));
-        let heading_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        heading_row.append(&heading);
-        heading_row.append(&project_color_button);
-        let subtitle = gtk::Label::new(Some("Drag folders here to add them"));
-        subtitle.add_css_class("rd-subtle");
-        subtitle.set_halign(gtk::Align::Start);
-
         let status = gtk::Label::new(None);
-        status.add_css_class("rd-footer");
+        status.add_css_class("rd-status");
         status.set_halign(gtk::Align::Start);
+        status.set_margin_start(20);
+        status.set_margin_end(20);
+        status.set_margin_bottom(8);
 
-        let projects_label = gtk::Label::new(Some("Projects"));
-        projects_label.add_css_class("rd-subtle");
-        projects_label.set_halign(gtk::Align::Start);
-
-        let project_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        let add_project = icon_button("list-add-symbolic", "Add project");
-        let rename_project = icon_button("document-edit-symbolic", "Rename project");
-        let delete_project = icon_button("user-trash-symbolic", "Delete project");
-        project_buttons.append(&add_project);
-        project_buttons.append(&rename_project);
-        project_buttons.append(&delete_project);
-
-        let left = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        left.set_width_request(240);
-        left.append(&projects_label);
-        left.append(&projects_scroll);
-        left.append(&project_buttons);
-
-        let right = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        right.set_hexpand(true);
-        right.append(&heading_row);
-        right.append(&subtitle);
-        let folder_spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        folder_spacer.set_height_request(6);
-        right.append(&folder_spacer);
-        right.append(&folders_scroll);
-        right.append(&status);
-
-        let body = gtk::Box::new(gtk::Orientation::Horizontal, 20);
-        body.set_margin_top(18);
-        body.set_margin_bottom(18);
-        body.set_margin_start(18);
-        body.set_margin_end(18);
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         body.set_vexpand(true);
-        body.append(&left);
-        body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-        body.append(&right);
+        body.append(&rail_row);
+        body.append(&heading_row);
+        body.append(&subtitle);
+        body.append(&folders_scroll);
+        body.append(&status);
 
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.append(&header);
@@ -153,42 +175,52 @@ impl ManageWindow {
 
         let manage = Self {
             window,
-            projects,
+            tabs,
             folders,
             heading,
             subtitle,
             status,
             project_color_button,
+            project_menu_button,
             delete_project,
             controller: controller.clone(),
             refreshing: Cell::new(false),
         };
 
-        manage.connect_signals(ManageButtons {
-            settings: &settings_button,
-            add_folder: &add_button,
-            open_wheel: &open_wheel,
-            add_project: &add_project,
-            rename_project: &rename_project,
-            delete_project: &manage.delete_project,
-            project_color: &manage.project_color_button,
-        });
+        manage.connect_signals(
+            &settings_button,
+            &open_wheel,
+            &add_folder,
+            &add_project,
+            &rename_project,
+        );
         manage.connect_drop_target();
         connect_folder_activation(&manage.folders, controller);
         manage.refresh();
         manage
     }
 
-    fn connect_signals(&self, buttons: ManageButtons<'_>) {
+    fn connect_signals(
+        &self,
+        settings: &gtk::Button,
+        open_wheel: &gtk::Button,
+        add_folder: &gtk::Button,
+        add_project: &gtk::Button,
+        rename_project: &gtk::Button,
+    ) {
         let controller = self.controller.clone();
-        buttons.settings.connect_clicked(move |_| {
+        let window = self.window.clone();
+        settings.connect_clicked(move |_| {
+            window.close();
             if let Some(controller) = controller.upgrade() {
                 controller.open_settings();
             }
         });
 
         let controller = self.controller.clone();
-        buttons.open_wheel.connect_clicked(move |_| {
+        let window = self.window.clone();
+        open_wheel.connect_clicked(move |_| {
+            window.close();
             if let Some(controller) = controller.upgrade() {
                 controller.show_launcher();
             }
@@ -197,29 +229,14 @@ impl ManageWindow {
         let controller = self.controller.clone();
         let window = self.window.clone();
         let status = self.status.clone();
-        buttons.add_folder.connect_clicked(move |_| {
+        add_folder.connect_clicked(move |_| {
             choose_folder(&window, controller.clone(), status.clone());
-        });
-
-        let controller = self.controller.clone();
-        buttons.project_color.connect_clicked(move |button| {
-            let Some(controller) = controller.upgrade() else {
-                return;
-            };
-            let project = controller.config().active_project().clone();
-            let project_id = project.id;
-            let controller = Rc::downgrade(&controller);
-            show_color_popover(button, Some(&project.color), false, move |color| {
-                if let (Some(color), Some(controller)) = (color, controller.upgrade()) {
-                    controller.set_project_color(project_id, color);
-                }
-            });
         });
 
         let controller = self.controller.clone();
         let window = self.window.clone();
         let status = self.status.clone();
-        buttons.add_project.connect_clicked(move |_| {
+        add_project.connect_clicked(move |_| {
             let controller = controller.clone();
             let status = status.clone();
             prompt_text(&window, "New project", "New Project", move |name| {
@@ -233,7 +250,9 @@ impl ManageWindow {
         let controller = self.controller.clone();
         let window = self.window.clone();
         let status = self.status.clone();
-        buttons.rename_project.connect_clicked(move |_| {
+        let menu = self.project_menu_button.clone();
+        rename_project.connect_clicked(move |_| {
+            menu.popdown();
             let Some(controller) = controller.upgrade() else {
                 return;
             };
@@ -250,7 +269,9 @@ impl ManageWindow {
 
         let controller = self.controller.clone();
         let window = self.window.clone();
-        buttons.delete_project.connect_clicked(move |_| {
+        let menu = self.project_menu_button.clone();
+        self.delete_project.connect_clicked(move |_| {
+            menu.popdown();
             let Some(controller) = controller.upgrade() else {
                 return;
             };
@@ -278,25 +299,18 @@ impl ManageWindow {
         });
 
         let controller = self.controller.clone();
-        self.projects.connect_row_selected(move |_, row| {
-            let Some(row) = row else {
-                return;
-            };
+        self.project_color_button.connect_clicked(move |button| {
             let Some(controller) = controller.upgrade() else {
                 return;
             };
-            let index = row.index() as usize;
-            let Some(project_id) = controller
-                .config()
-                .projects
-                .get(index)
-                .map(|project| project.id)
-            else {
-                return;
-            };
-            if controller.config().active_project != project_id {
-                controller.set_active_project(project_id);
-            }
+            let project = controller.config().active_project().clone();
+            let project_id = project.id;
+            let controller = Rc::downgrade(&controller);
+            show_color_popover(button, Some(&project.color), false, move |color| {
+                if let (Some(color), Some(controller)) = (color, controller.upgrade()) {
+                    controller.set_project_color(project_id, color);
+                }
+            });
         });
     }
 
@@ -360,35 +374,17 @@ impl ManageWindow {
         let active_project = config.active_project().clone();
         let project_count = config.projects.len();
 
-        self.projects.remove_all();
-        for project in &config.projects {
-            let row = gtk::ListBoxRow::new();
-            let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-            content.set_margin_top(8);
-            content.set_margin_bottom(8);
-            content.set_margin_start(8);
-            content.set_margin_end(8);
-            content.append(&color_dot(&project.color, 14));
-            let labels = gtk::Box::new(gtk::Orientation::Vertical, 1);
-            let name = gtk::Label::new(Some(&project.name));
-            name.set_halign(gtk::Align::Start);
-            name.set_ellipsize(pango::EllipsizeMode::End);
-            let count = gtk::Label::new(Some(&format!(
-                "{} folder{}",
-                project.folders.len(),
-                if project.folders.len() == 1 { "" } else { "s" }
-            )));
-            count.add_css_class("rd-subtle");
-            count.set_halign(gtk::Align::Start);
-            labels.append(&name);
-            labels.append(&count);
-            content.append(&labels);
-            row.set_child(Some(&content));
-            self.projects.append(&row);
-            if project.id == active_id {
-                self.projects.select_row(Some(&row));
-            }
-        }
+        let projects: Vec<ProjectTab> = config
+            .projects
+            .iter()
+            .map(|project| ProjectTab {
+                id: project.id,
+                name: project.name.clone(),
+                color: project.color.clone(),
+                folder_count: project.folders.len(),
+            })
+            .collect();
+        self.tabs.render(&projects, active_id);
 
         self.heading.set_text(&active_project.name);
         self.delete_project.set_sensitive(project_count > 1);
@@ -397,7 +393,7 @@ impl ManageWindow {
         self.project_color_button
             .set_tooltip_text(Some(&format!("Project colour: {}", active_project.color)));
         self.subtitle.set_text(&format!(
-            "{} folder{} · {} project{} · drag folders here",
+            "{} folder{} in {} project{} · drag folders onto the list",
             active_project.folders.len(),
             if active_project.folders.len() == 1 {
                 ""
@@ -435,9 +431,9 @@ impl ManageWindow {
             empty.set_halign(gtk::Align::Center);
             empty.set_margin_top(36);
             empty.set_margin_bottom(36);
-            let icon = gtk::Image::from_icon_name("folder-open-symbolic");
+            let icon = gtk::Image::from_icon_name("folder-symbolic");
             icon.set_pixel_size(36);
-            icon.set_opacity(0.45);
+            icon.set_opacity(0.5);
             let title = gtk::Label::new(Some("No folders in this project"));
             title.add_css_class("rd-title");
             let hint = gtk::Label::new(Some(
@@ -457,7 +453,11 @@ impl ManageWindow {
             empty.append(&title);
             empty.append(&hint);
             empty.append(&add);
-            self.folders.append(&empty);
+            let empty_row = gtk::ListBoxRow::new();
+            empty_row.set_activatable(false);
+            empty_row.set_selectable(false);
+            empty_row.set_child(Some(&empty));
+            self.folders.append(&empty_row);
         }
 
         drop(config);
@@ -479,53 +479,42 @@ fn build_folder_row(
         count,
         status,
     } = context;
+    let window = window.clone();
+    let controller = Rc::clone(controller);
+    let status = status.clone();
+    let project_color = project_color.to_owned();
     let row = gtk::ListBoxRow::new();
+    row.add_css_class("rd-folder-row");
     row.set_activatable(true);
     row.set_tooltip_text(Some(&format!(
         "{}\nDouble-click to open",
         folder.path.display()
     )));
 
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    content.set_margin_top(6);
-    content.set_margin_bottom(6);
-    content.set_margin_start(8);
-    content.set_margin_end(8);
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    content.set_margin_top(9);
+    content.set_margin_bottom(9);
+    content.set_margin_start(12);
+    content.set_margin_end(10);
 
-    let color = folder.color.as_deref().unwrap_or(project_color).to_owned();
-    let color_button = gtk::Button::new();
-    color_button.add_css_class("flat");
-    color_button.set_child(Some(&color_dot(&color, 14)));
-    color_button.set_tooltip_text(Some("Folder colour"));
-    {
-        let controller = Rc::downgrade(controller);
-        let folder_id = folder.id;
-        let current = color.clone();
-        color_button.connect_clicked(move |button| {
-            let controller = controller.clone();
-            let current = current.clone();
-            show_color_popover(button, Some(&current), true, move |picked| {
-                if let Some(controller) = controller.upgrade() {
-                    controller.set_folder_color(project_id, folder_id, picked);
-                }
-            });
-        });
-    }
-    content.append(&color_button);
+    let color = folder.color.as_deref().unwrap_or(&project_color).to_owned();
+    content.append(&color_dot(&color, 12));
 
-    let labels = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    let labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
     labels.set_hexpand(true);
     let label = gtk::Label::new(Some(&folder.label));
+    label.add_css_class("rd-folder-name");
     label.set_halign(gtk::Align::Start);
     label.set_ellipsize(pango::EllipsizeMode::End);
+    labels.append(&label);
+
+    let path_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    path_row.set_halign(gtk::Align::Fill);
     let path = gtk::Label::new(Some(&folder.path.to_string_lossy()));
-    path.add_css_class("rd-subtle");
+    path.add_css_class("rd-folder-path");
     path.set_halign(gtk::Align::Start);
     path.set_ellipsize(pango::EllipsizeMode::Middle);
-    labels.append(&label);
-    labels.append(&path);
-    content.append(&labels);
-
+    path_row.append(&path);
     match availability {
         Availability::Available => {}
         Availability::Missing => {
@@ -533,75 +522,71 @@ fn build_folder_row(
             badge.add_css_class("rd-badge");
             badge.add_css_class("rd-badge-error");
             badge.set_valign(gtk::Align::Center);
-            content.append(&badge);
+            path_row.append(&badge);
         }
         Availability::Offline => {
             let badge = gtk::Label::new(Some("drive offline"));
             badge.add_css_class("rd-badge");
             badge.add_css_class("rd-badge-error");
             badge.set_valign(gtk::Align::Center);
-            content.append(&badge);
+            path_row.append(&badge);
         }
     }
+    labels.append(&path_row);
+    content.append(&labels);
 
-    let up = icon_button("go-up-symbolic", "Move up");
-    up.set_sensitive(index > 0);
-    let down = icon_button("go-down-symbolic", "Move down");
-    down.set_sensitive(index + 1 < count);
-    let more = icon_button("view-more-symbolic", "More actions");
-
+    let open = gtk::Button::with_label("Open");
+    open.add_css_class("rd-row-action");
+    open.set_tooltip_text(Some("Open this folder"));
     {
-        let controller = Rc::downgrade(controller);
+        let controller = Rc::downgrade(&controller);
         let folder_id = folder.id;
-        up.connect_clicked(move |_| {
+        open.connect_clicked(move |_| {
             if let Some(controller) = controller.upgrade() {
-                controller.move_folder(project_id, folder_id, -1);
+                controller.launch(folder_id, Intent::Open);
             }
         });
     }
-    {
-        let controller = Rc::downgrade(controller);
-        let folder_id = folder.id;
-        down.connect_clicked(move |_| {
-            if let Some(controller) = controller.upgrade() {
-                controller.move_folder(project_id, folder_id, 1);
-            }
-        });
-    }
+    content.append(&open);
+
+    let more = gtk::Button::from_icon_name("view-more-symbolic");
+    more.add_css_class("flat");
+    more.add_css_class("rd-icon-button");
+    more.set_tooltip_text(Some("Folder actions"));
+    more.set_valign(gtk::Align::Center);
 
     {
-        let controller = Rc::downgrade(controller);
-        let window = window.clone();
-        let status = status.clone();
-        let more = more.clone();
+        let controller = Rc::downgrade(&controller);
         let folder_id = folder.id;
         let label = folder.label.clone();
         let path = folder.path.clone();
         let current_color = color.clone();
         more.connect_clicked(move |button| {
             let popover = gtk::Popover::new();
+            popover.add_css_class("rd-menu-popover");
             popover.set_parent(button);
             popover.set_has_arrow(false);
             let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            menu.add_css_class("rd-menu");
             menu.set_margin_top(6);
             menu.set_margin_bottom(6);
             menu.set_margin_start(6);
             menu.set_margin_end(6);
 
-            let open = menu_button("Open");
+            let open_item = menu_item("document-open-symbolic", "Open");
             {
                 let controller = controller.clone();
                 let popover = popover.downgrade();
-                open.connect_clicked(move |_| {
+                open_item.connect_clicked(move |_| {
                     popdown(&popover);
                     if let Some(controller) = controller.upgrade() {
                         controller.launch(folder_id, Intent::Open);
                     }
                 });
             }
-            menu.append(&open);
+            menu.append(&open_item);
 
-            let terminal = menu_button("Open in Terminal");
+            let terminal = menu_item("system-run-symbolic", "Open in Terminal");
             {
                 let controller = controller.clone();
                 let popover = popover.downgrade();
@@ -614,7 +599,7 @@ fn build_folder_row(
             }
             menu.append(&terminal);
 
-            let copy = menu_button("Copy Path");
+            let copy = menu_item("edit-copy-symbolic", "Copy Path");
             {
                 let popover = popover.downgrade();
                 let status = status.clone();
@@ -629,7 +614,7 @@ fn build_folder_row(
 
             menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
-            let rename = menu_button("Rename…");
+            let rename = menu_item("document-save-as-symbolic", "Rename…");
             {
                 let controller = controller.clone();
                 let window = window.clone();
@@ -640,8 +625,7 @@ fn build_folder_row(
                     popdown(&popover);
                     let controller = controller.clone();
                     let status = status.clone();
-                    let initial = label.clone();
-                    prompt_text(&window, "Rename folder", &initial, move |name| {
+                    prompt_text(&window, "Rename folder", &label, move |name| {
                         if let Some(controller) = controller.upgrade() {
                             controller.rename_folder(project_id, folder_id, &name);
                             show_status(&status, "Folder renamed");
@@ -651,13 +635,13 @@ fn build_folder_row(
             }
             menu.append(&rename);
 
-            let color = menu_button("Folder colour…");
+            let color_item = menu_item("color-select-symbolic", "Folder colour…");
             {
                 let controller = controller.clone();
                 let popover = popover.downgrade();
-                let button = button.clone();
+                let button: gtk::Button = button.clone();
                 let current_color = current_color.clone();
-                color.connect_clicked(move |_| {
+                color_item.connect_clicked(move |_| {
                     popdown(&popover);
                     let controller = controller.clone();
                     let current_color = current_color.clone();
@@ -668,11 +652,39 @@ fn build_folder_row(
                     });
                 });
             }
-            menu.append(&color);
+            menu.append(&color_item);
+
+            let up = menu_item("go-up-symbolic", "Move up");
+            up.set_sensitive(index > 0);
+            {
+                let controller = controller.clone();
+                let popover = popover.downgrade();
+                up.connect_clicked(move |_| {
+                    popdown(&popover);
+                    if let Some(controller) = controller.upgrade() {
+                        controller.move_folder(project_id, folder_id, -1);
+                    }
+                });
+            }
+            menu.append(&up);
+
+            let down = menu_item("go-down-symbolic", "Move down");
+            down.set_sensitive(index + 1 < count);
+            {
+                let controller = controller.clone();
+                let popover = popover.downgrade();
+                down.connect_clicked(move |_| {
+                    popdown(&popover);
+                    if let Some(controller) = controller.upgrade() {
+                        controller.move_folder(project_id, folder_id, 1);
+                    }
+                });
+            }
+            menu.append(&down);
 
             menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
-            let remove = menu_button("Remove from wheel…");
+            let remove = menu_item("user-trash-symbolic", "Remove from wheel…");
             remove.add_css_class("destructive-action");
             {
                 let controller = controller.clone();
@@ -710,17 +722,24 @@ fn build_folder_row(
         });
     }
 
-    content.append(&up);
-    content.append(&down);
     content.append(&more);
     row.set_child(Some(&content));
     row
 }
 
-fn menu_button(label: &str) -> gtk::Button {
-    let button = gtk::Button::with_label(label);
+fn menu_item(icon: &str, label: &str) -> gtk::Button {
+    let button = gtk::Button::new();
     button.add_css_class("flat");
+    button.add_css_class("rd-menu-item");
     button.set_halign(gtk::Align::Fill);
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let image = gtk::Image::from_icon_name(icon);
+    image.set_pixel_size(16);
+    content.append(&image);
+    let text = gtk::Label::new(Some(label));
+    text.set_halign(gtk::Align::Start);
+    content.append(&text);
+    button.set_child(Some(&content));
     button
 }
 
@@ -742,6 +761,7 @@ fn show_color_popover(
     on_pick: impl Fn(Option<&str>) + 'static,
 ) {
     let popover = gtk::Popover::new();
+    popover.add_css_class("rd-menu-popover");
     popover.set_parent(anchor);
     popover.set_has_arrow(false);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -755,6 +775,7 @@ fn show_color_popover(
         .column_spacing(6)
         .build();
     let on_pick = Rc::new(on_pick);
+    let selected: Rc<RefCell<Option<gtk::Button>>> = Rc::new(RefCell::new(None));
     for (index, color) in PALETTE.iter().enumerate() {
         let button = gtk::Button::new();
         button.add_css_class("flat");
@@ -762,6 +783,7 @@ fn show_color_popover(
         button.set_child(Some(&color_dot(color, 20)));
         if current.is_some_and(|value| value.eq_ignore_ascii_case(color)) {
             button.add_css_class("rd-color-selected");
+            *selected.borrow_mut() = Some(button.clone());
         }
         let popover_weak = popover.downgrade();
         let on_pick = on_pick.clone();
@@ -788,6 +810,14 @@ fn show_color_popover(
     popover.set_child(Some(&content));
     popover.connect_closed(|popover| popover.unparent());
     popover.popup();
+    let focus_target = selected.borrow().clone();
+    if let Some(button) = focus_target {
+        glib::idle_add_local_once(move || {
+            if button.is_mapped() {
+                button.grab_focus();
+            }
+        });
+    }
 }
 
 fn choose_folder(
@@ -828,28 +858,6 @@ fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {
     button.set_tooltip_text(Some(tooltip));
     button.set_valign(gtk::Align::Center);
     button
-}
-
-fn color_dot(color: &str, size: i32) -> gtk::DrawingArea {
-    let area = gtk::DrawingArea::new();
-    area.set_content_width(size);
-    area.set_content_height(size);
-    area.set_valign(gtk::Align::Center);
-    let color = color.to_owned();
-    area.set_draw_func(move |_area, cr, width, height| {
-        let (r, g, b) = theme::parse_hex(&color);
-        let radius = width.min(height) as f64 / 2.0 - 1.0;
-        cr.arc(
-            width as f64 / 2.0,
-            height as f64 / 2.0,
-            radius,
-            0.0,
-            std::f64::consts::TAU,
-        );
-        cr.set_source_rgb(r, g, b);
-        let _ = cr.fill();
-    });
-    area
 }
 
 fn show_status(label: &gtk::Label, message: &str) {

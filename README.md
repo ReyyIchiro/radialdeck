@@ -27,7 +27,8 @@ kanan file di Dolphin untuk langsung membuka roda konversi.
 | Dua global hotkey via XDG GlobalShortcuts portal | ✅ |
 | Navigasi keyboard: panah/scroll, angka `1`–`9`, `Enter`, `Esc` | ✅ |
 | Roda folder proyek: filter real-time, multi-project, terminal, clipboard | ✅ |
-| Kartu folder tunggal (tidak ada donut kosong) + roda untuk banyak folder | ✅ |
+| Target folder tunggal (cincin penuh) + roda untuk banyak folder | ✅ |
+| Rail project: tab aktif, overflow `+N`, palet project/folder | ✅ |
 | Manage: rename, warna per folder/project, urutan, buka/terminal/salin, konfirmasi hapus | ✅ |
 | Settings, autostart XDG, system tray, notifikasi | ✅ |
 | Tema mengikuti sistem (KDE color scheme + GTK) / paksa Light / Dark | ✅ |
@@ -113,9 +114,11 @@ install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 | `Esc` / klik area gelap | Tutup roda (state tetap konsisten) |
 | Drag file ke panel | Ganti sumber, kategori mengikuti file pertama |
 | Tab kategori | Ganti target; sumber yang tidak cocok ditandai |
-| `Tab` di roda folder | Ganti project (bila ada lebih dari satu) |
+| Klik tab project | Ganti project; tab aktif dan fokus keyboard dibedakan |
+| `Tab` di roda folder | Pindah fokus ke rail project; `Enter` memilih project |
 | `Ctrl+Enter` di roda folder | Buka folder di terminal |
-| Klik tengah di roda folder | Salin path folder |
+| Klik tengah wedge | Salin path folder ke clipboard |
+| Klik tengah pusat | Kelola project (atau buka folder saat hanya satu) |
 | Klik kanan item | Menu konteks (buka, terminal, salin, edit, hapus) |
 
 Konversi berjalan di thread terpisah; roda langsung tertutup dan hasil ditulis **di
@@ -146,9 +149,15 @@ Folder punya nama, path, warna opsional, dan urutan yang bisa diubah. Project ju
 warna sendiri; keduanya dipakai di roda. Tombol **Open Wheel** menampilkan hasilnya
 langsung.
 
+Rail di atas roda menampilkan maksimal lima project sebagai tab; sisanya masuk menu `+N`.
+Tab aktif ditandai border oranye, sedangkan fokus keyboard memakai border putih agar tidak
+ambigu. Klaster project memakai warna project, dan warna folder (jika ada) menimpa warna
+wedge.
+
 Roda folder mendukung filter real-time, `1`–`9`, `Ctrl+Enter` (terminal), klik tengah
-(salin path), klik kanan (menu), dan `Tab` untuk ganti project. Jika hanya ada satu folder,
-roda berubah menjadi satu kartu besar agar tidak ada cincin kosong.
+(salin path), klik kanan (menu), serta klik tab untuk ganti project. Jika hanya ada satu
+folder, roda menjadi satu target cincin penuh tanpa sektor kosong; pusat membuka folder,
+dan saat ada beberapa folder pusat membuka Manage.
 
 ---
 
@@ -186,8 +195,10 @@ crates/
         ├── action_wheel.rs    # roda konversi Cairo: gambar, hit-test, input
         ├── action_launcher.rs # panel overlay, tab kategori, drag & drop
         ├── controller.rs      # state, CLI single-instance, thread konversi
-        ├── launcher.rs        # roda folder proyek
-        ├── wheel.rs           # roda folder (Cairo), kartu item tunggal
+        ├── launcher.rs        # overlay roda folder + rail project
+        ├── wheel.rs           # roda folder (Cairo), target tunggal, menu
+        ├── project_tabs.rs    # tab project, overflow +N, sinkronisasi state
+        ├── widgets.rs         # helper tombol ikon dan klaster warna
         ├── manage.rs          # CRUD project/folder, warna, urutan
         ├── settings.rs        # dua shortcut, autostart, terminal, tema, log
         ├── hotkey.rs          # GlobalShortcuts portal (dua binding)
@@ -220,12 +231,14 @@ CI menjalankan fmt, clippy, test, dan build release di Ubuntu 24.04.
 
 | Test | Hasil |
 |---|---|
-| Unit test | ✅ 43 lulus (`deck-core` 40, app 3) |
+| Unit test | ✅ 45 lulus (`deck-core` 40, app 5) |
 | fmt + clippy `-D warnings` | ✅ bersih |
 | Layer-shell roda konversi + roda folder | ✅ screenshot KDE Wayland |
 | Dua hotkey portal | ✅ `Ctrl+Alt+Space` dan `Ctrl+Alt+P` aktif bersamaan |
-| Kartu folder tunggal + panel kompak | ✅ klik kartu membuka Dolphin, panel tertutup |
-| Manage 3 project / 3 folder | ✅ rename, warna, add folder, badge missing |
+| Target folder tunggal (cincin penuh) | ✅ klik target membuka Dolphin, panel tertutup |
+| Rail project overflow `+3` | ✅ screenshot: 5 tab + popover, tab aktif vs fokus keyboard |
+| Mode tanpa hasil filter | ✅ sektor disembunyikan, caption “No matches” |
+| Manage 8 project / 4 folder | ✅ rail, rename, warna, add folder, urutan, badge missing |
 | Project color + folder color | ✅ popover palet, tersimpan ke config |
 | Dismiss `Esc` / klik luar / reopen hotkey | ✅ window dan state controller konsisten |
 | PNG → JPG via klik roda | ✅ file JPEG valid |

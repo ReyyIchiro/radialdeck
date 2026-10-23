@@ -7,10 +7,12 @@ mod hotkey;
 mod launcher;
 mod logging;
 mod manage;
+mod project_tabs;
 mod settings;
 mod theme;
 mod tray;
 mod wheel;
+mod widgets;
 
 use gtk::prelude::*;
 

@@ -17,7 +17,7 @@ use crate::manage::ManageWindow;
 use crate::settings::SettingsWindow;
 use crate::theme;
 use crate::tray::{Tray, TrayCommand};
-use crate::wheel::{Action, Intent, WheelData, WheelFolder};
+use crate::wheel::{Action, Intent, ProjectTab, WheelData, WheelFolder};
 
 #[derive(Debug, Default, Clone)]
 pub struct Cli {
@@ -338,16 +338,10 @@ impl Controller {
     pub fn wheel_data(&self) -> WheelData {
         let config = self.config.borrow();
         let project = config.active_project();
-        let index = config
-            .projects
-            .iter()
-            .position(|candidate| candidate.id == project.id)
-            .unwrap_or(0);
         WheelData {
+            active_project: project.id,
             project_name: project.name.clone(),
             project_color: project.color.clone(),
-            project_total: config.projects.len(),
-            project_index: index,
             shortcut: self.display_projects_shortcut(),
             folders: project
                 .folders
@@ -357,6 +351,16 @@ impl Controller {
                     label: folder.label.clone(),
                     color: folder.color.clone(),
                     availability: config.availability_of(folder),
+                })
+                .collect(),
+            projects: config
+                .projects
+                .iter()
+                .map(|project| ProjectTab {
+                    id: project.id,
+                    name: project.name.clone(),
+                    color: project.color.clone(),
+                    folder_count: project.folders.len(),
                 })
                 .collect(),
         }
@@ -458,11 +462,6 @@ impl Controller {
         match action {
             Action::Launch(folder, intent) => self.launch(folder, intent),
             Action::Dismiss => self.hide_launcher(),
-            Action::CycleProject(offset) => {
-                self.config.borrow_mut().cycle_project(offset);
-                self.save();
-                self.refresh_launcher();
-            }
             Action::Manage => {
                 self.hide_launcher();
                 self.open_manage();

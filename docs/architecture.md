@@ -5,7 +5,7 @@
 ```text
 ┌──────────────────────────── radial-deck (GTK4, main thread) ───────────────────────────┐
 │ action_launcher.rs + action_wheel.rs (konversi, Cairo)                                 │
-│ launcher.rs + wheel.rs (folder, kartu tunggal)   manage.rs   settings.rs                │
+│ launcher.rs + project_tabs.rs + wheel.rs         manage.rs   settings.rs                │
 │        ▲                     ▲                              ▲            ▲              │
 │                     controller.rs (state, CLI, actions, windows)                        │
 │        │                     │                              │            │              │
@@ -98,25 +98,30 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
 
 ## Roda folder proyek
 
-- `launcher.rs` membuat layer-shell overlay dengan ukuran sama seperti roda konversi;
-  `wheel.rs` menggambar dan melakukan hit-test.
-- `WheelData` membawa project aktif, semua project (jumlah + warna untuk dot), folder
-  terfilter, query, dan total project. Filter dihitung di `deck-core::search` (fuzzy).
+- `launcher.rs` membuat layer-shell overlay; `project_tabs.rs` merender rail dan
+  `wheel.rs` menggambar serta melakukan hit-test.
+- `WheelData` membawa project aktif, semua project (untuk dot warna), folder terfilter,
+  query, dan flag fokus rail. Filter dihitung di `deck-core::search` (fuzzy).
 - Layout adaptif:
-  - 0 folder → empty state (cara menambah folder).
-  - 1 folder → satu kartu besar, judul project di atas, badge nomor, alasan bila folder
-    hilang/unmounted. Panel dipadatkan menjadi tinggi 360 px agar tidak ada ruang kosong.
-  - ≥2 folder → roda penuh; label dipotong elips dan diletakkan di dalam wedge.
+  - 0 folder / tidak ada hasil → empty state dengan CTA **Manage folders**.
+  - 1 folder → satu target cincin penuh; pusat membuka folder, badge alasan tampil bila
+    folder hilang/unmounted. Tidak ada sektor kosong.
+  - ≥2 folder → roda penuh; label ditempatkan di tengah ring, dengan font lebih kecil dan
+    lebar dibatasi untuk label samping agar tidak menabrak pusat atau tepi luar.
+- `project_tabs.rs` merender maksimal lima tab. Project aktif selalu terlihat; sisanya
+  masuk menu `+N`. Tab aktif memakai border oranye, fokus keyboard memakai border putih.
+  Tab dari wheel ditangkap di phase capture agar fokus berpindah sebelum GTK traversal.
 - Warna: project dan folder (opsional) memakai `#RRGGBB`; warna folder menimpa warna
-  project pada wedge/kartu. Parsing warna aman (fallback ke default).
-- Interaksi: klik = buka, klik tengah = salin path, klik kanan = menu konteks
-  (buka/terminal/salin/edit/hapus), `Ctrl+Enter` = terminal, `1`–`9` = item ke-N,
-  `Tab`/`Shift+Tab` = project, panah = pilih folder, `BackSpace` = hapus query,
-  `Esc` = tutup.
+  project pada wedge. Parsing warna aman (fallback ke default).
+- Interaksi: klik tab = ganti project, klik wedge = buka, klik tengah wedge = salin path,
+  klik kanan = menu konteks (buka/terminal/salin/edit/hapus), `Ctrl+Enter` = terminal,
+  `1`–`9` = item ke-N, panah = pilih folder, `Tab` = pindah fokus ke rail (lalu `Enter`),
+  `BackSpace` = hapus query, `Esc` = tutup. Pusat = Manage, kecuali hanya ada satu folder
+  (buka folder) atau query aktif (hapus query).
 - `manage.rs` adalah satu-satunya tempat mutasi project/folder. Setiap perubahan memanggil
   `controller.save_config()` lalu me-refresh roda/manage agar state tidak menyimpang.
-- `manage.rs` memakai `FolderRowContext` dan `ManageButtons` untuk menjaga jumlah argumen
-  dan memisahkan data baris dari widget.
+- `manage.rs` memakai `FolderRowContext` untuk memisahkan data baris dari widget, serta
+  rail project yang sama dengan roda supaya urutan/warna konsisten.
 
 ## Persistensi
 
@@ -179,8 +184,10 @@ crates/radial-deck/src/
 ├── controller.rs        # state + semua mutasi + jembatan UI + worker konversi
 ├── action_launcher.rs   # overlay panel konversi, tab, drag & drop, dismiss
 ├── action_wheel.rs      # roda konversi Cairo, hit-test, keyboard, hover
-├── launcher.rs          # layer-shell overlay roda folder
+├── launcher.rs          # layer-shell overlay roda folder + rail project
 ├── wheel.rs             # roda folder: drawing, hit-test, context menu
+├── project_tabs.rs      # tab project, overflow +N, sinkronisasi state
+├── widgets.rs           # tombol ikon, klaster warna, helper aksesibilitas
 ├── manage.rs            # CRUD project/folder, file chooser, drag & drop
 ├── settings.rs          # shortcut, autostart, terminal, tema, path log
 ├── hotkey.rs            # GlobalShortcuts portal, dua binding (tokio)

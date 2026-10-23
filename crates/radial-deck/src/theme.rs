@@ -100,9 +100,37 @@ window.rd-action-overlay {
     background: rgba(255, 90, 0, 0.10);
     border-color: #ff5a00;
 }
+.rd-tab:focus,
+.rd-rail-action:focus,
+.rd-tab-add:focus,
+.rd-menu-item:focus {
+    border-color: rgba(245, 245, 247, 0.85);
+}
 .rd-tab-label {
     font-size: 11px;
     font-weight: 500;
+}
+.rd-tab-more {
+    min-width: 30px;
+}
+.rd-tab-add {
+    min-width: 30px;
+    min-height: 30px;
+    padding: 3px;
+    border-radius: 9px;
+}
+.rd-rail-action {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 4px 10px;
+    min-height: 28px;
+    font-size: 11px;
+    color: inherit;
+    box-shadow: none;
+}
+.rd-rail-action:hover {
+    background: alpha(currentColor, 0.07);
 }
 .rd-heading {
     font-size: 30px;
@@ -129,6 +157,90 @@ window.rd-action-overlay {
 .rd-status {
     font-size: 12px;
     color: #c2410c;
+}
+
+/* Management window */
+.rd-manage-window {
+    background: @theme_bg_color;
+}
+.rd-manage-heading {
+    font-size: 21px;
+    font-weight: 700;
+}
+.rd-manage-subtitle {
+    font-size: 12px;
+    opacity: 0.62;
+}
+.rd-folder-list {
+    background: transparent;
+}
+.rd-folder-list row.rd-folder-row {
+    background: transparent;
+    border: 1px solid alpha(currentColor, 0.09);
+    border-radius: 10px;
+    margin-bottom: 4px;
+}
+.rd-folder-list row.rd-folder-row:hover {
+    background: alpha(currentColor, 0.05);
+}
+.rd-folder-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+.rd-folder-path {
+    font-size: 11px;
+    opacity: 0.55;
+}
+.rd-row-action {
+    min-height: 26px;
+    padding: 2px 10px;
+    border-radius: 8px;
+    font-size: 11px;
+}
+button.rd-icon-button,
+menubutton.rd-icon-button {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    padding: 4px;
+    min-width: 28px;
+    min-height: 28px;
+    color: inherit;
+}
+button.rd-icon-button:hover,
+menubutton.rd-icon-button:hover {
+    background: alpha(currentColor, 0.09);
+    border-radius: 8px;
+}
+.rd-menu-popover {
+    background: @theme_bg_color;
+    color: @theme_fg_color;
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+.rd-menu {
+    background: transparent;
+}
+.rd-menu-item {
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+    padding: 6px 10px;
+    min-height: 26px;
+    color: inherit;
+    box-shadow: none;
+}
+.rd-menu-item:hover {
+    background: alpha(currentColor, 0.08);
+}
+.rd-menu-item.destructive-action {
+    color: #e5484d;
+}
+.rd-menu-meta {
+    font-size: 10px;
+    opacity: 0.55;
+    margin-left: 10px;
 }
 "#;
 

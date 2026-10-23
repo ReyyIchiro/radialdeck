@@ -9,17 +9,21 @@ use gtk::prelude::*;
 use gtk4_layer_shell::LayerShell;
 
 use crate::controller::Controller;
+use crate::project_tabs::ProjectTabs;
 use crate::theme;
 use crate::wheel::{Action, Wheel, WheelData};
 
-const PANEL_WIDTH: i32 = 760;
-const WHEEL_WIDTH: i32 = 700;
-const WHEEL_HEIGHT: i32 = 560;
-const WHEEL_HEIGHT_COMPACT: i32 = 360;
+const PANEL_WIDTH: i32 = 980;
+const WHEEL_WIDTH: i32 = 900;
+const WHEEL_HEIGHT: i32 = 380;
 
 pub struct Launcher {
     window: gtk::ApplicationWindow,
     panel: gtk::Box,
+    tabs: ProjectTabs,
+    title: gtk::Label,
+    shortcut: gtk::Label,
+    caption: gtk::Label,
     wheel: Wheel,
     footer: gtk::Label,
     visible: Rc<Cell<bool>>,
@@ -36,7 +40,53 @@ impl Launcher {
         window.add_css_class("rd-overlay");
         window.set_can_focus(true);
 
+        let tabs = ProjectTabs::new();
+        {
+            let target = controller.clone();
+            tabs.set_handler(Rc::new(move |id| {
+                if let Some(controller) = target.upgrade() {
+                    controller.set_active_project(id);
+                }
+            }));
+        }
+        let manage = gtk::Button::with_label("Manage");
+        manage.add_css_class("rd-rail-action");
+        manage.set_tooltip_text(Some("Manage projects and folders"));
+        {
+            let target = controller.clone();
+            manage.connect_clicked(move |_| {
+                if let Some(controller) = target.upgrade() {
+                    controller.open_manage();
+                }
+            });
+        }
+        let rail = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        rail.set_halign(gtk::Align::Center);
+        rail.append(&tabs.container);
+        rail.append(&manage);
+
+        let title = gtk::Label::new(None);
+        title.add_css_class("rd-heading");
+        title.set_halign(gtk::Align::Center);
+        title.set_margin_top(8);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_max_width_chars(48);
+
+        let chip = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        chip.set_halign(gtk::Align::Center);
+        chip.set_margin_top(10);
+        let key = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        key.add_css_class("rd-key");
+        let shortcut = gtk::Label::new(None);
+        shortcut.add_css_class("rd-key-label");
+        key.append(&shortcut);
+        chip.append(&key);
+        let caption = gtk::Label::new(None);
+        caption.add_css_class("rd-caption");
+        chip.append(&caption);
+
         let wheel = Wheel::new();
+        wheel.area.add_css_class("rd-wheel");
         wheel.area.set_size_request(WHEEL_WIDTH, WHEEL_HEIGHT);
 
         let footer = gtk::Label::new(None);
@@ -44,13 +94,16 @@ impl Launcher {
         footer.set_halign(gtk::Align::Center);
         footer.set_margin_top(2);
 
-        let panel = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
         panel.add_css_class("rd-panel");
         panel.set_halign(gtk::Align::Center);
         panel.set_valign(gtk::Align::Center);
         panel.set_width_request(PANEL_WIDTH);
         panel.set_margin_top(24);
         panel.set_margin_bottom(24);
+        panel.append(&rail);
+        panel.append(&title);
+        panel.append(&chip);
         panel.append(&wheel.area);
         panel.append(&footer);
 
@@ -119,12 +172,24 @@ impl Launcher {
 
         {
             let target = controller.clone();
+            let tabs = tabs.clone();
+            let wheel_area = wheel.area.clone();
             let keys = gtk::EventControllerKey::new();
-            keys.connect_key_pressed(move |_keys, keyval, _keycode, _modifiers| {
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+            keys.connect_key_pressed(move |_keys, keyval, _keycode, modifiers| {
                 if keyval == gdk::Key::Escape {
+                    if wheel_area.has_focus() {
+                        return glib::Propagation::Proceed;
+                    }
                     if let Some(controller) = target.upgrade() {
                         controller.hide_launcher();
                     }
+                    glib::Propagation::Stop
+                } else if keyval == gdk::Key::Tab
+                    && !modifiers.contains(gdk::ModifierType::SHIFT_MASK)
+                    && wheel_area.has_focus()
+                {
+                    tabs.focus_first();
                     glib::Propagation::Stop
                 } else {
                     glib::Propagation::Proceed
@@ -155,6 +220,10 @@ impl Launcher {
         Self {
             window,
             panel,
+            tabs,
+            title,
+            shortcut,
+            caption,
             wheel,
             footer,
             visible,
@@ -203,25 +272,25 @@ impl Launcher {
     }
 
     pub fn set_data(&self, data: WheelData) {
-        let height = if data.folders.len() <= 1 {
-            WHEEL_HEIGHT_COMPACT
-        } else {
-            WHEEL_HEIGHT
-        };
-        self.wheel.area.set_size_request(WHEEL_WIDTH, height);
+        self.tabs.render(&data.projects, data.active_project);
+        self.title.set_text(&data.project_name);
+        self.shortcut.set_label(&data.shortcut.replace('+', " + "));
+        self.caption.set_text(&format!(
+            "{} folder{}",
+            data.folders.len(),
+            if data.folders.len() == 1 { "" } else { "s" }
+        ));
 
-        let mut hint = String::new();
-        if data.project_total > 1 {
-            hint.push_str("Tab switches project  ·  ");
-        }
-        if data.folders.len() > 1 {
-            hint.push_str("1–9 selects  ·  ");
-        }
-        let shortcut = data.shortcut.replace('+', " + ");
+        let folder_hint = if data.folders.len() > 1 {
+            "1–9 opens  ·  "
+        } else {
+            ""
+        };
         self.footer.set_label(&format!(
-            "{shortcut} toggles  ·  {hint}Type to search · Enter opens · Ctrl+Enter terminal · Esc closes"
+            "{folder_hint}Type to search  ·  Enter opens  ·  Ctrl+Enter terminal  ·  Esc closes"
         ));
         self.wheel.set_data(data);
+        self.wheel.focus();
     }
 
     pub fn update_theme(&self) {

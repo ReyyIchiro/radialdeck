@@ -25,24 +25,32 @@ pub struct WheelFolder {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProjectTab {
+    pub id: Uuid,
+    pub name: String,
+    pub color: String,
+    pub folder_count: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct WheelData {
+    pub active_project: Uuid,
     pub project_name: String,
     pub project_color: String,
-    pub project_total: usize,
-    pub project_index: usize,
     pub shortcut: String,
     pub folders: Vec<WheelFolder>,
+    pub projects: Vec<ProjectTab>,
 }
 
 impl Default for WheelData {
     fn default() -> Self {
         Self {
+            active_project: Uuid::nil(),
             project_name: "My Project".into(),
             project_color: "#3b82f6".into(),
-            project_total: 1,
-            project_index: 0,
             shortcut: "CTRL+ALT+P".into(),
             folders: Vec::new(),
+            projects: Vec::new(),
         }
     }
 }
@@ -58,7 +66,6 @@ pub enum Intent {
 pub enum Action {
     Launch(Uuid, Intent),
     Dismiss,
-    CycleProject(isize),
     Manage,
     Remove(Uuid),
 }
@@ -70,6 +77,7 @@ struct State {
     filtered: Vec<usize>,
     selected: Option<usize>,
     hover: Option<usize>,
+    focused: bool,
 }
 
 impl State {
@@ -114,36 +122,23 @@ struct Geometry {
     cy: f64,
     outer: f64,
     inner: f64,
-    /// Card used when exactly one folder is visible.
-    single: Rect,
-    /// Clickable project heading above the single-folder card.
-    heading: Rect,
+    caption_y: f64,
 }
-
-type Rect = (f64, f64, f64, f64);
 
 impl Geometry {
     fn new(width: f64, height: f64) -> Self {
-        let outer = (width.min(height) * 0.42).clamp(150.0, 245.0);
-        let inner = outer * 0.38;
+        let outer = (width.min(height) * 0.40).clamp(128.0, 176.0);
+        let inner = outer * 0.46;
         let cx = width / 2.0;
-        let cy = height / 2.0 - 4.0;
-        let card_width = (width * 0.52).clamp(300.0, 400.0);
-        let card_height = 76.0;
+        let cy = height / 2.0 - 6.0;
         Self {
             cx,
             cy,
             outer,
             inner,
-            single: (cx - card_width / 2.0, cy + 2.0, card_width, card_height),
-            heading: (cx - card_width / 2.0, cy - 104.0, card_width, 92.0),
+            caption_y: cy + outer + 24.0,
         }
     }
-}
-
-fn hit_rect(rect: Rect, x: f64, y: f64) -> bool {
-    let (rx, ry, rw, rh) = rect;
-    x >= rx && x <= rx + rw && y >= ry && y <= ry + rh
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,19 +149,17 @@ enum Hit {
 }
 
 fn hit_test(geo: &Geometry, state: &State, x: f64, y: f64) -> Hit {
-    if state.filtered.len() == 1 {
-        if hit_rect(geo.single, x, y) {
-            return Hit::Sector(0);
-        }
-        if hit_rect(geo.heading, x, y) {
-            return Hit::Center;
-        }
-        return Hit::Outside;
-    }
-
     let dx = x - geo.cx;
     let dy = y - geo.cy;
     let distance = (dx * dx + dy * dy).sqrt();
+    if state.filtered.len() == 1 {
+        return if distance <= geo.outer {
+            Hit::Sector(0)
+        } else {
+            Hit::Outside
+        };
+    }
+
     if distance <= geo.inner {
         return Hit::Center;
     }
@@ -230,6 +223,18 @@ impl Wheel {
                 }));
             });
         }
+        {
+            let state = state.clone();
+            let area = area.clone();
+            motion.connect_leave(move |_| {
+                let mut state = state.borrow_mut();
+                if state.hover.take().is_some() {
+                    drop(state);
+                    area.queue_draw();
+                }
+                area.set_cursor_from_name(Some("default"));
+            });
+        }
         area.add_controller(motion);
 
         let click = gtk::GestureClick::new();
@@ -252,7 +257,9 @@ impl Wheel {
                         drop(state_ref);
                         wheel.queue_draw();
                         if let Some(folder) = folder {
-                            let intent = if modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
+                            let intent = if button == 2 {
+                                Intent::CopyPath
+                            } else if modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
                                 Intent::Terminal
                             } else if modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
                                 Intent::CopyPath
@@ -270,21 +277,22 @@ impl Wheel {
                         }
                     }
                     (Hit::Center, 1) => {
-                        let empty = state_ref.data.folders.is_empty();
-                        drop(state_ref);
-                        if empty {
-                            emit(&actions, Action::Manage);
+                        let had_query = !state_ref.query.is_empty();
+                        if had_query {
+                            state_ref.query.clear();
+                            state_ref.rebuild();
+                            state_ref.selected = None;
+                            drop(state_ref);
+                            wheel.queue_draw();
+                        } else if state_ref.filtered.len() == 1 {
+                            let folder = state_ref.folder_at(0);
+                            drop(state_ref);
+                            if let Some(folder) = folder {
+                                emit(&actions, Action::Launch(folder, Intent::Open));
+                            }
                         } else {
-                            emit(
-                                &actions,
-                                Action::CycleProject(
-                                    if modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
-                                        -1
-                                    } else {
-                                        1
-                                    },
-                                ),
-                            );
+                            drop(state_ref);
+                            emit(&actions, Action::Manage);
                         }
                     }
                     (Hit::Center, 3) => {
@@ -329,8 +337,6 @@ impl Wheel {
                         state_ref.rebuild();
                         state_ref.selected = None;
                     }
-                    gdk::Key::Tab => action = Some(Action::CycleProject(1)),
-                    gdk::Key::ISO_Left_Tab => action = Some(Action::CycleProject(-1)),
                     gdk::Key::Up | gdk::Key::Left => {
                         move_selection(&mut state_ref, -1);
                     }
@@ -385,6 +391,25 @@ impl Wheel {
         }
         area.add_controller(keys);
 
+        let focus = gtk::EventControllerFocus::new();
+        {
+            let state = state.clone();
+            let area = area.clone();
+            focus.connect_enter(move |_| {
+                state.borrow_mut().focused = true;
+                area.queue_draw();
+            });
+        }
+        {
+            let state = state.clone();
+            let area = area.clone();
+            focus.connect_leave(move |_| {
+                state.borrow_mut().focused = false;
+                area.queue_draw();
+            });
+        }
+        area.add_controller(focus);
+
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         {
             let state = state.clone();
@@ -415,6 +440,8 @@ impl Wheel {
     pub fn set_data(&self, data: WheelData) {
         let mut state = self.state.borrow_mut();
         state.data = data;
+        state.selected = None;
+        state.hover = None;
         state.rebuild();
         self.area.queue_draw();
     }
@@ -512,14 +539,12 @@ fn draw(cr: &gtk::cairo::Context, width: i32, height: i32, state: &State) {
     let palette = palette(theme::is_dark());
 
     cr.set_antialias(gtk::cairo::Antialias::Best);
-
-    // Soft halo so the wheel separates from the panel surface.
     let halo = gtk::cairo::RadialGradient::new(
         geo.cx,
-        geo.cy + 4.0,
-        geo.outer * 0.9,
+        geo.cy + 6.0,
+        geo.outer * 0.85,
         geo.cx,
-        geo.cy + 4.0,
+        geo.cy + 6.0,
         geo.outer * 1.18,
     );
     halo.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, palette.shadow_alpha);
@@ -528,94 +553,98 @@ fn draw(cr: &gtk::cairo::Context, width: i32, height: i32, state: &State) {
     cr.paint().ok();
 
     if state.filtered.is_empty() {
-        draw_center(cr, &geo, state, &palette, 0);
-        draw_project_dots(cr, &geo, state, &palette);
+        draw_empty(cr, &geo, state, &palette);
+        draw_focus(cr, &geo, state);
+        return;
+    }
+    if state.filtered.len() == 1 {
+        draw_single(cr, &geo, state, &palette);
+        draw_focus(cr, &geo, state);
         return;
     }
 
     let count = state.filtered.len();
-    if count == 1 {
-        draw_single(cr, &geo, state, &palette);
-        draw_project_dots(cr, &geo, state, &palette);
-        return;
-    }
     let step = TAU / count as f64;
-    let gap = if count <= 1 {
-        0.0
-    } else {
-        (step * 0.055).clamp(0.012, 0.04)
-    };
+    let gap = (step * 0.075).clamp(0.016, 0.055);
     let (pr, pg, pb) = theme::parse_hex(&state.data.project_color);
 
     for (position, folder_index) in state.filtered.iter().enumerate() {
         let folder = &state.data.folders[*folder_index];
-        let start = -FRAC_PI_2 + position as f64 * step + gap / 2.0;
-        let end = -FRAC_PI_2 + (position + 1) as f64 * step - gap / 2.0;
+        let start = -FRAC_PI_2 - step / 2.0 + gap / 2.0 + position as f64 * step;
+        let end = start + step - gap;
         let active = state.hover == Some(position) || state.selected == Some(position);
         let (fr, fg, fb) = folder
             .color
             .as_deref()
             .map(theme::parse_hex)
             .unwrap_or((pr, pg, pb));
+        let tint = if active { 0.46 } else { 0.10 };
+        let inner = mix(palette.ring_inner, (fr, fg, fb), tint * 0.55);
+        let outer = mix(palette.ring_outer, (fr, fg, fb), tint);
 
-        let base = mix(
-            palette.ring_inner,
-            (fr, fg, fb),
-            if active { 0.62 } else { 0.28 },
-        );
+        let gradient =
+            gtk::cairo::RadialGradient::new(geo.cx, geo.cy, geo.inner, geo.cx, geo.cy, geo.outer);
+        gradient.add_color_stop_rgb(0.0, inner.0, inner.1, inner.2);
+        gradient.add_color_stop_rgb(1.0, outer.0, outer.1, outer.2);
         wedge(cr, geo.cx, geo.cy, geo.inner, geo.outer, start, end);
-        cr.set_source_rgb(base.0, base.1, base.2);
+        let _ = cr.set_source(&gradient);
         let _ = cr.fill_preserve();
-        cr.set_source_rgba(fr, fg, fb, if active { 0.98 } else { 0.48 });
-        cr.set_line_width(if active { 1.8 } else { 1.0 });
+        cr.set_source_rgba(fr, fg, fb, if active { 0.95 } else { 0.34 });
+        cr.set_line_width(if active { 2.0 } else { 1.0 });
         let _ = cr.stroke();
 
         if folder.availability != Availability::Available {
-            let _ = cr.save();
+            cr.new_path();
             cr.arc(geo.cx, geo.cy, geo.outer - 3.0, start, end);
-            cr.set_source_rgba(0.90, 0.28, 0.30, 0.90);
+            cr.set_source_rgba(0.90, 0.28, 0.30, 0.92);
             cr.set_line_width(3.0);
             let _ = cr.stroke();
-            let _ = cr.restore();
         }
 
         let mid = (start + end) / 2.0;
-        let label_radius = (geo.inner + geo.outer) / 2.0 + 4.0;
-        // A single folder spans 2π, so the normal chord formula collapses to
-        // zero and would ellipsize every label to a few characters.
-        let max_width = if count <= 2 {
-            (geo.inner * 1.55).clamp(140.0, 240.0)
+        let label_radius = (geo.inner + geo.outer) / 2.0;
+        let mut max_width = if count <= 2 {
+            (geo.inner * 1.55).clamp(120.0, 210.0)
         } else {
-            (2.0 * label_radius * (step / 2.0).sin() * 0.86).clamp(64.0, 190.0)
+            (2.0 * label_radius * (step / 2.0).sin() * 0.84).clamp(58.0, 170.0)
         };
-        let font_size = if count <= 6 {
-            14.0
-        } else if count <= 12 {
+        let side_label = mid.cos().abs() > 0.4;
+        if side_label {
+            let inward = (label_radius - geo.inner - 4.0) * 2.0;
+            max_width = max_width.min(inward.max(48.0));
+        }
+        let base_size = if count <= 8 {
             12.5
+        } else if count <= 13 {
+            11.5
         } else {
-            11.0
+            10.5
         };
-
-        let text_color = (
-            palette.text.0,
-            palette.text.1,
-            palette.text.2,
-            if active { 1.0 } else { 0.92 },
-        );
+        let font_size = if side_label {
+            base_size - 1.5
+        } else {
+            base_size
+        };
+        let color = if folder.availability == Availability::Available {
+            palette.text
+        } else {
+            palette.muted
+        };
         text(
             cr,
             geo.cx + mid.cos() * label_radius,
             geo.cy + mid.sin() * label_radius,
             &folder.label,
             font_size,
-            text_color,
+            (color.0, color.1, color.2, if active { 1.0 } else { 0.92 }),
             max_width,
             true,
         );
     }
 
     draw_center(cr, &geo, state, &palette, count);
-    draw_project_dots(cr, &geo, state, &palette);
+    draw_caption(cr, &geo, state, &palette, count);
+    draw_focus(cr, &geo, state);
 }
 
 fn draw_single(cr: &gtk::cairo::Context, geo: &Geometry, state: &State, palette: &Palette) {
@@ -630,127 +659,130 @@ fn draw_single(cr: &gtk::cairo::Context, geo: &Geometry, state: &State, palette:
         .map(theme::parse_hex)
         .unwrap_or((pr, pg, pb));
     let active = state.hover == Some(0) || state.selected == Some(0);
+    let tint = if active { 0.46 } else { 0.18 };
+    let inner = mix(palette.ring_inner, (fr, fg, fb), tint * 0.55);
+    let outer = mix(palette.ring_outer, (fr, fg, fb), tint);
 
-    let strong = (palette.text.0, palette.text.1, palette.text.2, 0.98);
-    let muted = (palette.muted.0, palette.muted.1, palette.muted.2, 0.82);
-    let heading_width = geo.single.2;
+    let gradient =
+        gtk::cairo::RadialGradient::new(geo.cx, geo.cy, geo.inner, geo.cx, geo.cy, geo.outer);
+    gradient.add_color_stop_rgb(0.0, inner.0, inner.1, inner.2);
+    gradient.add_color_stop_rgb(1.0, outer.0, outer.1, outer.2);
+    circle(cr, geo.cx, geo.cy, geo.outer);
+    let _ = cr.set_source(&gradient);
+    let _ = cr.fill_preserve();
+    cr.set_source_rgba(fr, fg, fb, if active { 0.98 } else { 0.52 });
+    cr.set_line_width(if active { 2.2 } else { 1.2 });
+    let _ = cr.stroke();
 
+    if folder.availability != Availability::Available {
+        cr.new_path();
+        cr.arc(geo.cx, geo.cy, geo.outer - 4.0, 0.0, TAU);
+        cr.set_source_rgba(0.90, 0.28, 0.30, 0.92);
+        cr.set_line_width(3.0);
+        let _ = cr.stroke();
+    }
+
+    circle(cr, geo.cx, geo.cy, geo.inner * 0.86);
+    cr.set_source_rgba(palette.center.0, palette.center.1, palette.center.2, 0.98);
+    let _ = cr.fill_preserve();
+    cr.set_source_rgba(palette.rim.0, palette.rim.1, palette.rim.2, 0.12);
+    cr.set_line_width(1.0);
+    let _ = cr.stroke();
+
+    let color = if folder.availability == Availability::Available {
+        palette.text
+    } else {
+        palette.muted
+    };
+    text(
+        cr,
+        geo.cx,
+        geo.cy - 7.0,
+        &folder.label,
+        15.0,
+        (color.0, color.1, color.2, 0.98),
+        geo.inner * 1.72,
+        true,
+    );
+    text(
+        cr,
+        geo.cx,
+        geo.cy + 15.0,
+        if state.query.is_empty() {
+            "Open"
+        } else {
+            "1 match"
+        },
+        10.0,
+        (palette.muted.0, palette.muted.1, palette.muted.2, 0.9),
+        geo.inner * 1.5,
+        false,
+    );
+    draw_caption(cr, geo, state, palette, 1);
+}
+
+fn draw_empty(cr: &gtk::cairo::Context, geo: &Geometry, state: &State, palette: &Palette) {
+    let muted = (palette.muted.0, palette.muted.1, palette.muted.2, 0.9);
+    cr.set_dash(&[6.0, 7.0], 0.0);
+    cr.set_line_width(2.0);
+    cr.set_source_rgba(muted.0, muted.1, muted.2, 0.42);
+    cr.new_path();
+    cr.arc(geo.cx, geo.cy, geo.outer, 0.0, TAU);
+    let _ = cr.stroke();
+    cr.set_dash(&[], 0.0);
+
+    circle(cr, geo.cx, geo.cy, geo.inner * 0.86);
+    cr.set_source_rgba(palette.center.0, palette.center.1, palette.center.2, 0.98);
+    let _ = cr.fill_preserve();
+    cr.set_source_rgba(palette.rim.0, palette.rim.1, palette.rim.2, 0.10);
+    cr.set_line_width(1.0);
+    let _ = cr.stroke();
+
+    let width = geo.inner * 1.7;
     if state.query.is_empty() {
         text(
             cr,
             geo.cx,
-            geo.cy - 66.0,
-            &state.data.project_name,
-            18.0,
-            strong,
-            heading_width,
+            geo.cy - 7.0,
+            "No folders",
+            14.0,
+            (palette.text.0, palette.text.1, palette.text.2, 0.98),
+            width,
             true,
         );
-        let mut hint = format!(
-            "{} folder{}",
-            state.data.folders.len(),
-            if state.data.folders.len() == 1 {
-                ""
-            } else {
-                "s"
-            }
-        );
-        if state.data.project_total > 1 {
-            hint.push_str("  ·  Tab switches project");
-        }
         text(
             cr,
             geo.cx,
-            geo.cy - 42.0,
-            &hint,
-            10.5,
+            geo.cy + 14.0,
+            "Click to manage",
+            10.0,
             muted,
-            heading_width,
+            width,
             false,
         );
     } else {
         text(
             cr,
             geo.cx,
-            geo.cy - 66.0,
+            geo.cy - 7.0,
             &state.query,
-            17.0,
-            strong,
-            heading_width,
+            15.0,
+            (palette.text.0, palette.text.1, palette.text.2, 0.98),
+            width,
             true,
         );
         text(
             cr,
             geo.cx,
-            geo.cy - 42.0,
-            "1 match",
-            10.5,
+            geo.cy + 14.0,
+            "No matches",
+            10.0,
             muted,
-            heading_width,
-            false,
-        );
-    }
-
-    let (x, y, width, height) = geo.single;
-    let base = mix(
-        palette.ring_inner,
-        (fr, fg, fb),
-        if active { 0.68 } else { 0.44 },
-    );
-    rounded_rect(cr, x, y, width, height, 18.0);
-    cr.set_source_rgb(base.0, base.1, base.2);
-    let _ = cr.fill_preserve();
-    cr.set_source_rgba(fr, fg, fb, if active { 0.98 } else { 0.62 });
-    cr.set_line_width(if active { 2.0 } else { 1.0 });
-    let _ = cr.stroke();
-
-    let badge_x = x + 38.0;
-    let badge_y = y + height / 2.0;
-    circle(cr, badge_x, badge_y, 13.0);
-    cr.set_source_rgba(palette.center.0, palette.center.1, palette.center.2, 0.98);
-    let _ = cr.fill_preserve();
-    cr.set_source_rgba(palette.rim.0, palette.rim.1, palette.rim.2, 0.18);
-    cr.set_line_width(1.0);
-    let _ = cr.stroke();
-    text(
-        cr,
-        badge_x,
-        badge_y,
-        "1",
-        11.0,
-        (palette.muted.0, palette.muted.1, palette.muted.2, 0.9),
-        22.0,
-        true,
-    );
-
-    text(
-        cr,
-        geo.cx + 12.0,
-        badge_y,
-        &folder.label,
-        16.0,
-        (palette.text.0, palette.text.1, palette.text.2, 1.0),
-        width - 102.0,
-        true,
-    );
-
-    if folder.availability != Availability::Available {
-        let reason = if folder.availability == Availability::Missing {
-            "Folder not found on disk"
-        } else {
-            "Drive is not connected"
-        };
-        text(
-            cr,
-            geo.cx,
-            y + height + 26.0,
-            reason,
-            10.5,
-            (0.90, 0.28, 0.30, 0.95),
             width,
             false,
         );
     }
+    draw_caption(cr, geo, state, palette, 0);
 }
 
 fn draw_center(
@@ -760,132 +792,125 @@ fn draw_center(
     palette: &Palette,
     count: usize,
 ) {
-    let (pr, pg, pb) = theme::parse_hex(&state.data.project_color);
-    circle(cr, geo.cx, geo.cy, geo.inner - 4.0);
-    let center = mix(palette.center, (pr, pg, pb), 0.16);
-    cr.set_source_rgb(center.0, center.1, center.2);
+    circle(cr, geo.cx, geo.cy, geo.inner * 0.86);
+    cr.set_source_rgba(palette.center.0, palette.center.1, palette.center.2, 0.98);
     let _ = cr.fill_preserve();
-    cr.set_source_rgba(palette.rim.0, palette.rim.1, palette.rim.2, 0.16);
-    cr.set_line_width(1.2);
+    cr.set_source_rgba(palette.rim.0, palette.rim.1, palette.rim.2, 0.10);
+    cr.set_line_width(1.0);
     let _ = cr.stroke();
 
-    let inner_width = (geo.inner - 12.0).max(90.0) * 1.6;
-    let muted = (palette.muted.0, palette.muted.1, palette.muted.2, 0.82);
+    let width = geo.inner * 1.5;
+    let muted = (palette.muted.0, palette.muted.1, palette.muted.2, 0.9);
     let strong = (palette.text.0, palette.text.1, palette.text.2, 0.98);
-    if !state.query.is_empty() {
+    if state.query.is_empty() {
         text(
             cr,
             geo.cx,
-            geo.cy - 18.0,
-            &state.query,
-            17.0,
+            geo.cy - 6.0,
+            "Manage",
+            11.5,
             strong,
-            inner_width,
-            true,
-        );
-        text(
-            cr,
-            geo.cx,
-            geo.cy + 8.0,
-            &format!("{count} match{}", if count == 1 { "" } else { "es" }),
-            10.5,
-            muted,
-            inner_width,
-            false,
-        );
-    } else if state.data.folders.is_empty() {
-        text(
-            cr,
-            geo.cx,
-            geo.cy - 10.0,
-            "No folders",
-            13.0,
-            strong,
-            inner_width,
+            width,
             true,
         );
         text(
             cr,
             geo.cx,
             geo.cy + 12.0,
-            "Click to manage",
-            10.0,
+            "folders",
+            9.5,
             muted,
-            inner_width,
+            width,
             false,
         );
     } else {
         text(
             cr,
             geo.cx,
-            geo.cy - 16.0,
-            &state.data.project_name,
-            15.0,
+            geo.cy - 7.0,
+            &state.query,
+            14.0,
             strong,
-            inner_width,
+            width,
             true,
         );
         text(
             cr,
             geo.cx,
-            geo.cy + 6.0,
-            &format!(
-                "{} folder{}",
-                state.data.folders.len(),
-                if state.data.folders.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            ),
-            10.5,
+            geo.cy + 12.0,
+            &format!("{count} match{}", if count == 1 { "" } else { "es" }),
+            9.5,
             muted,
-            inner_width,
+            width,
             false,
         );
-        if state.data.project_total > 1 {
-            text(
-                cr,
-                geo.cx,
-                geo.cy + 26.0,
-                "Tab to switch",
-                9.5,
-                (palette.muted.0, palette.muted.1, palette.muted.2, 0.62),
-                inner_width,
-                false,
-            );
-        }
     }
 }
 
-fn draw_project_dots(cr: &gtk::cairo::Context, geo: &Geometry, state: &State, palette: &Palette) {
-    let total = state.data.project_total;
-    if total < 2 {
+fn draw_caption(
+    cr: &gtk::cairo::Context,
+    geo: &Geometry,
+    state: &State,
+    palette: &Palette,
+    count: usize,
+) {
+    let muted = (palette.muted.0, palette.muted.1, palette.muted.2, 0.9);
+    let error = (0.90, 0.28, 0.30, 0.98);
+    let hovered = state
+        .hover
+        .or(state.selected)
+        .and_then(|position| state.filtered.get(position))
+        .and_then(|index| state.data.folders.get(*index));
+
+    let (label, color) = if !state.query.is_empty() {
+        (
+            format!(
+                "{count} match{} · click center clears",
+                if count == 1 { "" } else { "es" }
+            ),
+            muted,
+        )
+    } else if let Some(folder) = hovered {
+        match folder.availability {
+            Availability::Available => (format!("Open {}", folder.label), muted),
+            Availability::Missing => ("Folder is not on disk".to_string(), error),
+            Availability::Offline => ("Drive is offline".to_string(), error),
+        }
+    } else if state.data.folders.is_empty() {
+        ("Add a folder to get started".to_string(), muted)
+    } else if count == 1 {
+        (
+            "Click to open · right-click center to manage".to_string(),
+            muted,
+        )
+    } else {
+        (
+            "Choose a folder · click center to manage".to_string(),
+            muted,
+        )
+    };
+
+    text(
+        cr,
+        geo.cx,
+        geo.caption_y,
+        &label,
+        11.0,
+        color,
+        geo.outer * 2.8,
+        false,
+    );
+}
+
+fn draw_focus(cr: &gtk::cairo::Context, geo: &Geometry, state: &State) {
+    if !state.focused {
         return;
     }
-    let spacing = 14.0;
-    let start_x = geo.cx - (total.saturating_sub(1) as f64 * spacing) / 2.0;
-    let y = (geo.cy - geo.outer - 20.0).max(18.0);
-    let project_color = theme::parse_hex(&state.data.project_color);
-    for index in 0..total.min(12) {
-        let x = start_x + index as f64 * spacing;
-        circle(
-            cr,
-            x,
-            y,
-            if index == state.data.project_index {
-                3.5
-            } else {
-                2.2
-            },
-        );
-        if index == state.data.project_index {
-            cr.set_source_rgb(project_color.0, project_color.1, project_color.2);
-        } else {
-            cr.set_source_rgba(palette.muted.0, palette.muted.1, palette.muted.2, 0.42);
-        }
-        let _ = cr.fill();
-    }
+    cr.new_path();
+    cr.arc(geo.cx, geo.cy, geo.outer + 7.0, 0.0, TAU);
+    cr.set_source_rgba(1.0, 0.353, 0.0, 0.9);
+    cr.set_line_width(2.0);
+    let _ = cr.stroke();
 }
 
 fn mix(base: (f64, f64, f64), accent: (f64, f64, f64), amount: f64) -> (f64, f64, f64) {
@@ -894,34 +919,6 @@ fn mix(base: (f64, f64, f64), accent: (f64, f64, f64), amount: f64) -> (f64, f64
         base.1 + (accent.1 - base.1) * amount,
         base.2 + (accent.2 - base.2) * amount,
     )
-}
-
-fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, width: f64, height: f64, radius: f64) {
-    let radius = radius.min(width / 2.0).min(height / 2.0);
-    cr.new_sub_path();
-    cr.arc(x + width - radius, y + radius, radius, -FRAC_PI_2, 0.0);
-    cr.arc(
-        x + width - radius,
-        y + height - radius,
-        radius,
-        0.0,
-        FRAC_PI_2,
-    );
-    cr.arc(
-        x + radius,
-        y + height - radius,
-        radius,
-        FRAC_PI_2,
-        std::f64::consts::PI,
-    );
-    cr.arc(
-        x + radius,
-        y + radius,
-        radius,
-        std::f64::consts::PI,
-        1.5 * std::f64::consts::PI,
-    );
-    cr.close_path();
 }
 
 fn circle(cr: &gtk::cairo::Context, x: f64, y: f64, radius: f64) {
