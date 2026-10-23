@@ -1,0 +1,17 @@
+# Rust build output
+/target
+**/*.rs.bk
+
+# Packaging artifacts
+*.pkg.tar.zst
+packaging/aur/pkg/
+packaging/aur/src/
+packaging/aur/*.tar.gz
+.flatpak-builder/
+build-dir/
+packaging/flatpak/cargo-sources.json
+
+# Editors
+.idea/
+.vscode/
+*.swp
