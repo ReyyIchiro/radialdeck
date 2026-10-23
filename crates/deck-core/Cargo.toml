@@ -12,6 +12,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 directories.workspace = true
-
-[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff", "ico", "pnm", "qoi", "tga"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = "1"
+tar = "0.4"
+walkdir = "2"
 tempfile.workspace = true
