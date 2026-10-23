@@ -86,6 +86,8 @@ install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 | `radial-deck --manage` | Buka jendela manajemen folder |
 | `radial-deck --settings` | Buka pengaturan |
 | `radial-deck --reset-config` | Hapus konfigurasi dan mulai ulang |
+| `radial-deck --version` | Cetak versi |
+| `radial-deck --help` | Cetak bantuan |
 
 ### Shortcut default
 
@@ -162,11 +164,21 @@ CI otomatis berjalan di GitHub Actions untuk setiap push dan PR ke `main`.
 | Keyboard search | ✅ filter + query real-time |
 | Tab project cycling | ✅ warna center berubah |
 | Config persistence | ✅ bertahan lintas proses |
+| Global hotkey `Ctrl+Alt+Space` | ✅ membuka overlay (diverifikasi end-to-end) |
+| Manage & Settings window | ✅ dirender tanpa panic |
 | Idle RAM (release) | ~48 MB RSS |
 | Binary size | 4.3 MB stripped |
-| **Hotkey portal approval** | ⚠️ perlu klik OK di dialog KDE sekali |
 
 ---
+
+### Catatan hotkey
+
+Saat pertama kali dijalankan, KDE menampilkan dialog *Global Shortcuts Requested*;
+klik **OK** sekali. Jika shortcut pernah ditolak, baris `toggle` di
+`~/.config/kglobalshortcutsrc` berisi `none` — buka **Settings → Change Shortcut…**
+untuk mengikat ulang lewat System Settings, atau hapus section
+`[io.github.raihan.RadialDeck]` dari file tersebut lalu jalankan ulang aplikasi.
+Aplikasi akan menampilkan peringatan bila portal mengembalikan binding kosong.
 
 ## Langkah Berikutnya
 
