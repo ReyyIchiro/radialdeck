@@ -24,6 +24,8 @@ pub struct Cli {
     pub manage: bool,
     pub settings: bool,
     pub reset: bool,
+    pub version: bool,
+    pub help: bool,
 }
 
 impl Cli {
@@ -36,6 +38,8 @@ impl Cli {
                 "--manage" => cli.manage = true,
                 "--settings" => cli.settings = true,
                 "--reset-config" => cli.reset = true,
+                "--version" | "-V" => cli.version = true,
+                "--help" | "-h" => cli.help = true,
                 _ => {}
             }
         }
