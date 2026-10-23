@@ -1,0 +1,52 @@
+# Maintainer: Raihan <your-email>
+pkgname=radial-deck
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Radial overlay launcher for project folders (Wayland/X11, KDE Plasma)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/raihan/radial-deck"
+license=('MIT')
+depends=(
+    'gtk4'
+    'gtk4-layer-shell'
+    'xdg-desktop-portal'
+    'xdg-utils'
+    'hicolor-icon-theme'
+)
+makedepends=('cargo' 'rust')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver/$pkgname-$pkgver.tar.gz")
+# TODO: update sha256 after first release tag
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release --all-features
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    cargo test --frozen --all
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+
+    install -Dm755 "target/release/radial-deck" \
+        "$pkgdir/usr/bin/radial-deck"
+
+    install -Dm644 "packaging/io.github.raihan.RadialDeck.desktop" \
+        "$pkgdir/usr/share/applications/io.github.raihan.RadialDeck.desktop"
+
+    install -Dm644 "packaging/io.github.raihan.RadialDeck.svg" \
+        "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.raihan.RadialDeck.svg"
+
+    install -Dm644 LICENSE \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
