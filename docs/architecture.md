@@ -4,8 +4,8 @@
 
 ```text
 ┌──────────────────────────── radial-deck (GTK4, main thread) ───────────────────────────┐
-│ action_launcher.rs (panel, tabs, DnD) + action_wheel.rs (Cairo)                         │
-│ launcher.rs + wheel.rs (roda folder)      manage.rs      settings.rs                   │
+│ action_launcher.rs + action_wheel.rs (konversi, Cairo)                                 │
+│ launcher.rs + wheel.rs (folder, kartu tunggal)   manage.rs   settings.rs                │
 │        ▲                     ▲                              ▲            ▲              │
 │                     controller.rs (state, CLI, actions, windows)                        │
 │        │                     │                              │            │              │
@@ -38,14 +38,15 @@ clipboard, notifikasi, autostart.
 
 ## Alur hotkey
 
-1. `hotkey.rs` membuat sesi `org.freedesktop.portal.GlobalShortcuts` dan meminta binding
-   `toggle` dengan trigger pilihan (`Ctrl+Alt+Space` default).
-2. Portal (KDE) menyimpan persetujuan user; sinyal `Activated` diteruskan sebagai
-   `HotkeyEvent::Activated`.
-3. Controller men-toggle overlay. Binding tidak memakai `XGrabKey`/Carbon sehingga aman
-   di Wayland dan tidak mencuri input saat aplikasi lain aktif.
-4. `ConfigureShortcuts` membuka UI portal; setelah selesai, binding dibaca ulang dan
-   ditampilkan di Settings/tray.
+1. `hotkey.rs` membuat satu sesi `org.freedesktop.portal.GlobalShortcuts` dengan dua
+   binding: `toggle` (quick actions, default `Ctrl+Alt+Space`) dan `projects` (folder,
+   default `Ctrl+Alt+P`).
+2. Portal (KDE) menyimpan persetujuan user per binding; sinyal `Activated(id)` membawa id
+   sehingga controller memilih overlay yang benar. Binding tidak memakai `XGrabKey`/Carbon;
+   aman di Wayland dan tidak mencuri input saat aplikasi lain fokus.
+3. `HotkeyEvent::Bound` memperbarui label aktual di Settings/tray; `Error` menyimpan pesan
+   per-id agar satu binding gagal tidak menyembunyikan binding lain.
+4. `ConfigureShortcuts` membuka UI portal; setelah selesai, `ListShortcuts` dibaca ulang.
 
 Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjuti
 (mis. `xdg-desktop-portal` tidak berjalan). Aplikasi tetap bisa dipakai lewat tray.
@@ -61,6 +62,16 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
   dipakai karena GTK4 tidak menyediakan move window lintas backend — dicatat sebagai
   keterbatasan.
 - Keyboard exclusive memberi fokus penuh saat panel tampil; `Esc` selalu menutup.
+- **Invariant lifecycle:** satu-satunya pemilik visibilitas adalah controller/launcher.
+  Handler klik luar dan `Esc` mengirim `Dismiss` ke controller, bukan memanggil
+  `set_visible(false)` sendiri. Sebelumnya handler menyembunyikan root window tanpa
+  memperbarui flag `visible`, sehingga hotkey berikutnya hanya “menutup” overlay tak
+  terlihat — bug ini sudah diperbaiki dan diverifikasi.
+- Overlay disembunyikan saat dismiss dan dipakai ulang agar pembukaan berikutnya cepat.
+  Membuka overlay lain selalu menutup yang lama; manage/settings menutup keduanya.
+  Pengelolaan window tetap memakai referensi controller; bila window destroyed (mis.
+  compositor/restart), controller membuat ulang saat diminta.
+- Bila surface gagal di-map, controller melakukan verifikasi state + retry satu kali.
 
 ## Roda konversi
 
@@ -80,8 +91,32 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
   diproses di main context (`glib::spawn_future_local`) supaya tidak ada mutasi UI dari
   thread lain. Satu konversi pada satu waktu (`converting` flag).
 - Output ditulis di direktori sumber; nama yang sudah ada tidak ditimpa (error dilaporkan).
-- Dismiss: `Escape` di level window (capture phase) dan klik pada scrim (pick-test),
-  sehingga klik di wedge tidak ikut menutup panel.
+- Dismiss: `Escape` dan klik di luar `panel.compute_bounds()` dikirim sebagai
+  `ActionRequest::Dismiss` ke controller; klik di dalam wedge tidak menutup panel.
+- Panel selalu memakai kelas `.rd-panel` dan palet `action_wheel::palette()`; roda folder
+  memakai komponen/ warna yang sama agar light/dark konsisten.
+
+## Roda folder proyek
+
+- `launcher.rs` membuat layer-shell overlay dengan ukuran sama seperti roda konversi;
+  `wheel.rs` menggambar dan melakukan hit-test.
+- `WheelData` membawa project aktif, semua project (jumlah + warna untuk dot), folder
+  terfilter, query, dan total project. Filter dihitung di `deck-core::search` (fuzzy).
+- Layout adaptif:
+  - 0 folder → empty state (cara menambah folder).
+  - 1 folder → satu kartu besar, judul project di atas, badge nomor, alasan bila folder
+    hilang/unmounted. Panel dipadatkan menjadi tinggi 360 px agar tidak ada ruang kosong.
+  - ≥2 folder → roda penuh; label dipotong elips dan diletakkan di dalam wedge.
+- Warna: project dan folder (opsional) memakai `#RRGGBB`; warna folder menimpa warna
+  project pada wedge/kartu. Parsing warna aman (fallback ke default).
+- Interaksi: klik = buka, klik tengah = salin path, klik kanan = menu konteks
+  (buka/terminal/salin/edit/hapus), `Ctrl+Enter` = terminal, `1`–`9` = item ke-N,
+  `Tab`/`Shift+Tab` = project, panah = pilih folder, `BackSpace` = hapus query,
+  `Esc` = tutup.
+- `manage.rs` adalah satu-satunya tempat mutasi project/folder. Setiap perubahan memanggil
+  `controller.save_config()` lalu me-refresh roda/manage agar state tidak menyimpang.
+- `manage.rs` memakai `FolderRowContext` dan `ManageButtons` untuk menjaga jumlah argumen
+  dan memisahkan data baris dari widget.
 
 ## Persistensi
 
@@ -94,7 +129,10 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
     dengan default dan memberi notifikasi (tidak menghapus data user);
   - schema lebih baru → app berhenti dengan pesan jelas.
 - `Config::normalize` memperbaiki invariant (project minimal satu, id unik, path absolut,
-  warna valid, project aktif valid) tanpa menyentuh file di disk.
+  warna valid, project aktif valid, shortcut tidak duplikat) tanpa menyentuh file di disk.
+- Schema 2 menambahkan `preferences.projects_hotkey`. Migrasi aditif dari schema 1; file
+  dengan schema lebih baru ditolak sebelum ditulis.
+- Config disimpan ulang hanya saat ada perubahan; refresh UI tidak menulis disk.
 
 ## Keamanan
 
@@ -117,9 +155,14 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
   interaksi.
 - Overlay dibuat lazy saat pertama dipakai; idle hanya tray + hotkey + GTK loop.
 - Konversi berjalan di thread terpisah; UI tidak memblokir dan progres tidak memicu polling.
-- Tidak menyentuh GPU NVIDIA; GTK/KWin memakai renderer default Intel.
+- `GSK_RENDERER=cairo` dipaksa sebelum GTK init (kecuali user meng-override). Ini
+  mengurangi RSS window pertama dari ~115 MB ke ~68 MB dan tidak membutuhkan GPU.
 - Wheel digambar dengan Cairo (CPU) hanya saat tampil/berubah.
-- Release idle: ~25 MB PSS (~48 MB RSS termasuk shared library GTK), binary stripped 6.3 MB (diukur pada rilis 0.1.0).
+- Window manage/settings dihancurkan saat ditutup, bukan disembunyikan, agar widget tree
+  dilepas. Overlay roda tetap dipakai ulang setelah dismiss.
+- Release idle (hidden, setelah startup): ~53 MB RSS. Setelah window pertama: ~68–87 MB
+  RSS. Binary 6.5 MiB (stripped). Diukur pada 2026-10-23, KDE Wayland.
+- Tidak ada polling; hotkey/tray menunggu D-Bus, UI hanya redraw saat interaksi.
 
 ## Struktur kode Linux
 
@@ -139,8 +182,9 @@ crates/radial-deck/src/
 ├── launcher.rs          # layer-shell overlay roda folder
 ├── wheel.rs             # roda folder: drawing, hit-test, context menu
 ├── manage.rs            # CRUD project/folder, file chooser, drag & drop
-├── settings.rs          # hotkey portal, autostart, terminal, tema
-├── hotkey.rs            # GlobalShortcuts portal (tokio)
+├── settings.rs          # shortcut, autostart, terminal, tema, path log
+├── hotkey.rs            # GlobalShortcuts portal, dua binding (tokio)
+├── logging.rs           # log harian di XDG_STATE_HOME, retensi 7 file
 ├── tray.rs              # StatusNotifierItem (ksni)
 ├── actions.rs           # xdg-open, terminal, clipboard
 ├── autostart.rs         # XDG autostart desktop entry
