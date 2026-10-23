@@ -371,7 +371,7 @@ pub(crate) fn palette(dark: bool) -> Palette {
             ring_inner: (0.949, 0.949, 0.953),
             ring_outer: (0.855, 0.855, 0.863),
             text: (0.11, 0.11, 0.12),
-            muted: (0.48, 0.48, 0.51),
+            muted: (0.40, 0.40, 0.43),
             center: (1.0, 1.0, 1.0),
             rim: (0.0, 0.0, 0.0),
             shadow_alpha: 0.14,
