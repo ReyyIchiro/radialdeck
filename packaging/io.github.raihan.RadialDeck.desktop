@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=RadialDeck
+GenericName=Radial folder launcher
+Comment=Open project folders from a radial overlay
+Exec=radial-deck
+Icon=io.github.raihan.RadialDeck
+Terminal=false
+Categories=Utility;
+Keywords=folder;launcher;shortcut;productivity;projects;
+StartupNotify=false
+SingleMainWindow=true
