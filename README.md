@@ -157,9 +157,9 @@ roda berubah menjadi satu kartu besar agar tidak ada cincin kosong.
 Folder: `$XDG_CONFIG_HOME/radial-deck/config.json` (default `~/.config/radial-deck/config.json`).
 Ditulis otomatis dan atomik; tidak perlu edit manual. Path konversi tidak disimpan.
 
-Schema saat ini **2**; file schema 1 dimigrasikan otomatis dengan menambahkan shortcut
-project (`projects_hotkey`). File yang lebih baru ditolak dengan pesan jelas, bukan
-ditimpa. Detail invariant ada di [`docs/architecture.md`](docs/architecture.md).
+Schema saat ini **2**; file schema 1 dibaca sebagai schema 2 saat load dengan shortcut
+project default (`projects_hotkey`), lalu ditulis sebagai schema 2 pada perubahan config
+berikutnya. File yang lebih baru ditolak dengan pesan jelas, bukan ditimpa. Detail invariant ada di [`docs/architecture.md`](docs/architecture.md).
 
 Log: `$XDG_STATE_HOME/radial-deck/logs/radial-deck.YYYY-MM-DD.log`
 (fallback `~/.local/state/...`), retensi 7 hari. Buka lewat **Settings → Open Logs** atau
