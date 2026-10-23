@@ -4,6 +4,7 @@ use ksni::menu::{CheckmarkItem, StandardItem};
 #[derive(Debug, Clone, Copy)]
 pub enum TrayCommand {
     Show,
+    Projects,
     Manage,
     Settings,
     ToggleAutostart,
@@ -40,7 +41,7 @@ impl ksni::Tray for Tray {
     }
 
     fn icon_name(&self) -> String {
-        "folder".into()
+        "io.github.raihan.RadialDeck".into()
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
@@ -50,7 +51,7 @@ impl ksni::Tray for Tray {
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
             title: "RadialDeck".into(),
-            description: format!("Open launcher: {}", self.shortcut),
+            description: format!("Quick actions: {}", self.shortcut),
             ..Default::default()
         }
     }
@@ -59,9 +60,15 @@ impl ksni::Tray for Tray {
         use ksni::MenuItem;
         vec![
             StandardItem {
-                label: "Show Launcher".into(),
+                label: "Quick Actions".into(),
                 shortcut: vec![shortcut_keys(&self.shortcut)],
                 activate: Box::new(|tray: &mut Tray| tray.send(TrayCommand::Show)),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Project Folders…".into(),
+                activate: Box::new(|tray: &mut Tray| tray.send(TrayCommand::Projects)),
                 ..Default::default()
             }
             .into(),

@@ -77,10 +77,6 @@ impl Launcher {
         self.window.set_visible(false);
     }
 
-    pub fn is_visible(&self) -> bool {
-        self.window.is_visible()
-    }
-
     pub fn set_data(&self, data: WheelData) {
         self.wheel.set_data(data);
     }

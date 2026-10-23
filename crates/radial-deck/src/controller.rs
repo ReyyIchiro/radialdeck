@@ -2,11 +2,13 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use deck_core::{Config, FolderError, Store, StoreError, Theme};
+use deck_core::{Category, Config, FolderError, Store, StoreError, Theme, Tools};
 use gtk::glib;
 use gtk::prelude::*;
 use uuid::Uuid;
 
+use crate::action_launcher::{ActionLauncher, ActionRequest, ActionView};
+use crate::action_wheel::WheelTarget;
 use crate::actions;
 use crate::autostart;
 use crate::hotkey::{self, HotkeyEvent, HotkeyService};
@@ -26,6 +28,7 @@ pub struct Cli {
     pub reset: bool,
     pub version: bool,
     pub help: bool,
+    pub files: Vec<PathBuf>,
 }
 
 impl Cli {
@@ -40,6 +43,7 @@ impl Cli {
                 "--reset-config" => cli.reset = true,
                 "--version" | "-V" => cli.version = true,
                 "--help" | "-h" => cli.help = true,
+                other if !other.starts_with('-') => cli.files.push(PathBuf::from(other)),
                 _ => {}
             }
         }
@@ -60,14 +64,19 @@ pub struct Controller {
     pub launcher: RefCell<Option<Launcher>>,
     pub manage: RefCell<Option<ManageWindow>>,
     pub settings: RefCell<Option<SettingsWindow>>,
+    pub action_launcher: RefCell<Option<ActionLauncher>>,
+    action_sources: RefCell<Vec<PathBuf>>,
+    action_category: std::cell::Cell<Category>,
+    action_status: RefCell<Option<String>>,
+    tools: Tools,
+    converting: std::cell::Cell<bool>,
     hotkey: RefCell<Option<HotkeyService>>,
     tray: RefCell<Option<ksni::blocking::Handle<Tray>>>,
     hold_guard: RefCell<Option<gtk::gio::ApplicationHoldGuard>>,
     pub hotkey_state: RefCell<HotkeyState>,
-    activated: std::cell::Cell<bool>,
+    cli_handled: std::cell::Cell<bool>,
     startup_notice: RefCell<Option<String>>,
     fatal_error: RefCell<Option<String>>,
-    flags: Cli,
 }
 
 impl Controller {
@@ -123,14 +132,19 @@ impl Controller {
             launcher: RefCell::new(None),
             manage: RefCell::new(None),
             settings: RefCell::new(None),
+            action_launcher: RefCell::new(None),
+            action_sources: RefCell::new(Vec::new()),
+            action_category: std::cell::Cell::new(Category::Images),
+            action_status: RefCell::new(None),
+            tools: Tools::detect(),
+            converting: std::cell::Cell::new(false),
             hotkey: RefCell::new(None),
             tray: RefCell::new(None),
             hold_guard: RefCell::new(None),
             hotkey_state: RefCell::new(HotkeyState::default()),
-            activated: std::cell::Cell::new(false),
+            cli_handled: std::cell::Cell::new(false),
             startup_notice: RefCell::new(startup_notice),
             fatal_error: RefCell::new(fatal_error),
-            flags,
         })
     }
 
@@ -192,7 +206,8 @@ impl Controller {
                     break;
                 };
                 match command {
-                    TrayCommand::Show => controller.show_launcher(),
+                    TrayCommand::Show => controller.toggle_actions(),
+                    TrayCommand::Projects => controller.show_launcher(),
                     TrayCommand::Manage => controller.open_manage(),
                     TrayCommand::Settings => controller.open_settings(),
                     TrayCommand::ToggleAutostart => controller.toggle_autostart(),
@@ -215,7 +230,7 @@ impl Controller {
                     break;
                 };
                 match event {
-                    HotkeyEvent::Activated => controller.toggle_launcher(),
+                    HotkeyEvent::Activated => controller.toggle_actions(),
                     HotkeyEvent::Bound(description) => {
                         controller.hotkey_state.borrow_mut().effective = description.clone();
                         controller.hotkey_state.borrow_mut().error = None;
@@ -304,19 +319,6 @@ impl Controller {
     pub fn hide_launcher(&self) {
         if let Some(launcher) = self.launcher.borrow().as_ref() {
             launcher.hide();
-        }
-    }
-
-    pub fn toggle_launcher(self: &Rc<Self>) {
-        let visible = self
-            .launcher
-            .borrow()
-            .as_ref()
-            .is_some_and(|launcher| launcher.is_visible());
-        if visible {
-            self.hide_launcher();
-        } else {
-            self.show_launcher();
         }
     }
 
@@ -612,7 +614,7 @@ impl Controller {
                 .summary(&title)
                 .body(&body)
                 .appname("RadialDeck")
-                .icon("folder")
+                .icon("io.github.raihan.RadialDeck")
                 .timeout(notify_rust::Timeout::Milliseconds(4000))
                 .show()
             {
@@ -627,21 +629,325 @@ impl Controller {
         }
     }
 
-    pub fn handle_activate(self: &Rc<Self>) {
-        if self.activated.replace(true) {
+    /// Applies one command line invocation. Called for the first launch and
+    /// for later invocations forwarded to the running instance.
+    pub fn handle_cli(self: &Rc<Self>, cli: Cli) {
+        self.cli_handled.set(true);
+        if cli.manage {
             self.open_manage();
-            return;
-        }
-        if self.flags.manage {
-            self.open_manage();
-        } else if self.flags.settings {
+        } else if cli.settings {
             self.open_settings();
-        } else if self.flags.show {
-            self.show_launcher();
-        } else if !self.flags.hidden {
-            self.open_manage();
+        } else if !cli.files.is_empty() {
+            self.show_actions(cli.files);
+        } else if cli.show || !cli.hidden {
+            self.show_actions(Vec::new());
         }
     }
+
+    pub fn handle_activate(self: &Rc<Self>) {
+        if self.cli_handled.replace(false) {
+            return;
+        }
+        // Gaining focus while the wheel is already open must not reset the
+        // dropped files (a plain click would otherwise clear the selection).
+        let visible = self
+            .action_launcher
+            .borrow()
+            .as_ref()
+            .is_some_and(ActionLauncher::is_visible);
+        if visible {
+            return;
+        }
+        self.show_actions(Vec::new());
+    }
+
+    pub fn show_actions(self: &Rc<Self>, files: Vec<PathBuf>) {
+        let files = normalize_paths(files);
+        if let Some(category) = files.first().and_then(|file| category_for(file)) {
+            self.action_category.set(category);
+        }
+        // An empty invocation (hotkey or tray) starts from a clean slate; only
+        // an explicit drop or file-manager launch seeds sources.
+        *self.action_sources.borrow_mut() = files;
+        self.action_status.replace(None);
+
+        if self.action_launcher.borrow().is_none() {
+            let Some(app) = self.app.borrow().clone() else {
+                return;
+            };
+            let controller = Rc::downgrade(self);
+            let handler = Rc::new(move |request: ActionRequest| {
+                if let Some(controller) = controller.upgrade() {
+                    controller.handle_action_request(request);
+                }
+            });
+            *self.action_launcher.borrow_mut() = Some(ActionLauncher::new(&app, handler));
+        }
+        self.refresh_actions();
+        if let Some(launcher) = self.action_launcher.borrow().as_ref() {
+            launcher.present();
+        }
+    }
+
+    pub fn hide_actions(&self) {
+        if let Some(launcher) = self.action_launcher.borrow().as_ref() {
+            launcher.hide();
+        }
+    }
+
+    pub fn toggle_actions(self: &Rc<Self>) {
+        let visible = self
+            .action_launcher
+            .borrow()
+            .as_ref()
+            .is_some_and(ActionLauncher::is_visible);
+        tracing::debug!("toggle actions: visible={visible}");
+        if visible {
+            self.hide_actions();
+        } else {
+            self.show_actions(Vec::new());
+        }
+    }
+
+    fn action_view(&self) -> ActionView {
+        let sources = self.action_sources.borrow().clone();
+        let category = self.action_category.get();
+        let matching: Vec<&PathBuf> = sources
+            .iter()
+            .filter(|path| category_for(path) == Some(category))
+            .collect();
+        let source = matching
+            .first()
+            .map(|path| path.as_path())
+            .or_else(|| sources.first().map(PathBuf::as_path));
+        let targets = deck_core::convert::registry::targets(category, source, &self.tools)
+            .into_iter()
+            .map(|target| WheelTarget {
+                available: target.is_available(),
+                id: target.id.clone(),
+                label: target.label.clone(),
+                reason: target.reason.clone(),
+            })
+            .collect();
+
+        // The hub shows the dropped source even when the selected tab does not
+        // match it, so switching tabs never looks like an empty drop.
+        let label_source = matching
+            .first()
+            .map(|path| path.as_path())
+            .or_else(|| sources.first().map(PathBuf::as_path));
+        let label_count = if matching.is_empty() {
+            sources.len()
+        } else {
+            matching.len()
+        };
+        let source_label = match (label_count, label_source) {
+            (0, _) => String::new(),
+            (1, Some(path)) => deck_core::convert::registry::extension(path)
+                .map(|ext| ext.to_uppercase())
+                .unwrap_or_else(|| "FILE".into()),
+            (count, _) => format!("{count} FILES"),
+        };
+
+        ActionView {
+            category,
+            title: category.heading().into(),
+            source_label,
+            targets,
+            shortcut: self.display_shortcut(),
+            status: self.action_status.borrow().clone().or_else(|| {
+                (!sources.is_empty() && matching.is_empty())
+                    .then(|| "This tab has no formats for the dropped files.".to_owned())
+            }),
+            empty_hint: if sources.is_empty() {
+                "Drop files".into()
+            } else if matching.is_empty() {
+                "Switch to a matching tab".into()
+            } else {
+                "Choose a format".into()
+            },
+        }
+    }
+
+    fn refresh_actions(&self) {
+        if let Some(launcher) = self.action_launcher.borrow().as_ref() {
+            launcher.render(self.action_view());
+        }
+    }
+
+    fn handle_action_request(self: &Rc<Self>, request: ActionRequest) {
+        match request {
+            ActionRequest::Category(category) => {
+                self.action_category.set(category);
+                self.action_status.replace(None);
+                self.refresh_actions();
+            }
+            ActionRequest::Dropped(paths) => {
+                let files = normalize_paths(paths);
+                if files.is_empty() {
+                    return;
+                }
+                if let Some(category) = category_for(&files[0]) {
+                    self.action_category.set(category);
+                }
+                *self.action_sources.borrow_mut() = files;
+                self.action_status.replace(None);
+                self.refresh_actions();
+            }
+            ActionRequest::Run(target) => self.run_conversion(&target),
+            ActionRequest::Unavailable(reason) => {
+                self.action_status.replace(Some(reason));
+                self.refresh_actions();
+            }
+            ActionRequest::Dismiss => self.hide_actions(),
+        }
+    }
+
+    fn run_conversion(self: &Rc<Self>, target_id: &str) {
+        tracing::debug!(
+            "run requested: {target_id}, sources={}",
+            self.action_sources.borrow().len()
+        );
+        if self.converting.get() {
+            self.action_status
+                .replace(Some("A conversion is already running".into()));
+            self.refresh_actions();
+            return;
+        }
+        let category = self.action_category.get();
+        let sources: Vec<PathBuf> = self
+            .action_sources
+            .borrow()
+            .iter()
+            .filter(|path| category_for(path) == Some(category))
+            .cloned()
+            .collect();
+        if sources.is_empty() {
+            self.action_status.replace(Some(
+                "No files match this category. Switch tabs or drop different files.".into(),
+            ));
+            self.refresh_actions();
+            return;
+        }
+        let targets = deck_core::convert::registry::targets(
+            category,
+            sources.first().map(PathBuf::as_path),
+            &self.tools,
+        );
+        let Some(target) = targets.iter().find(|target| target.id == target_id) else {
+            return;
+        };
+        if let Some(reason) = &target.reason {
+            self.action_status.replace(Some(reason.clone()));
+            self.refresh_actions();
+            return;
+        }
+
+        let target_id = target_id.to_owned();
+        self.converting.set(true);
+        self.hide_actions();
+        tracing::info!(
+            "converting {} file(s) from {:?} to {}",
+            sources.len(),
+            category,
+            target_id
+        );
+
+        let (sender, receiver) = async_channel::bounded(1);
+        let thread_sources = sources.clone();
+        let tools = self.tools;
+        let thread_target = target_id.clone();
+        std::thread::spawn(move || {
+            let outcome = deck_core::convert(&thread_sources, category, &thread_target, &tools);
+            let _ = sender.send_blocking(outcome);
+        });
+
+        let controller = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let outcome = receiver.recv().await;
+            if let Some(controller) = controller.upgrade() {
+                controller.converting.set(false);
+                match outcome {
+                    Ok(outcome) => controller.report_conversion(&outcome),
+                    Err(_) => {
+                        tracing::error!("conversion worker stopped without a result");
+                        controller.notify(
+                            "Conversion failed",
+                            "The converter stopped unexpectedly. Check the log for details.",
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    fn report_conversion(&self, outcome: &deck_core::Outcome) {
+        let created = outcome.created.len();
+        let failed = outcome.failures.len();
+        tracing::info!("conversion finished: {created} created, {failed} failed");
+        if created == 0 && failed == 0 {
+            self.notify("Nothing converted", "No files matched the selected format.");
+            return;
+        }
+        if failed == 0 {
+            self.notify(
+                "Conversion complete",
+                &format!(
+                    "{} file{} written next to the original{}.",
+                    created,
+                    if created == 1 { "" } else { "s" },
+                    if created == 1 { "" } else { "s" }
+                ),
+            );
+            return;
+        }
+        let first = &outcome.failures[0];
+        let name = first
+            .source
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| first.source.display().to_string());
+        let summary = if created == 0 {
+            format!("Could not convert {name}: {}", first.message)
+        } else {
+            format!(
+                "{created} written, {failed} failed. {name}: {}",
+                first.message
+            )
+        };
+        self.notify("Conversion issues", &summary);
+    }
+}
+
+fn category_for(path: &std::path::Path) -> Option<Category> {
+    if path.is_dir() {
+        Some(Category::Archives)
+    } else {
+        Category::of(path)
+    }
+}
+
+fn normalize_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().ok();
+    paths
+        .into_iter()
+        .filter(|path| {
+            if path.is_absolute() {
+                path.exists()
+            } else {
+                cwd.as_ref()
+                    .map(|cwd| cwd.join(path).exists())
+                    .unwrap_or(false)
+            }
+        })
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                cwd.as_ref().map(|cwd| cwd.join(&path)).unwrap_or(path)
+            }
+        })
+        .collect()
 }
 
 fn next_color(controller: &Controller) -> String {

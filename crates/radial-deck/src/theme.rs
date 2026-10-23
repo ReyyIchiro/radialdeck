@@ -1,6 +1,13 @@
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
 use gtk::{gdk, CssProvider};
 
 use deck_core::Theme;
+
+/// Cached so Cairo repaints never touch the filesystem or GTK settings.
+static DARK: AtomicBool = AtomicBool::new(false);
+/// Explicit user preference: 0 = system, 1 = light, 2 = dark.
+static PREFERENCE: AtomicU8 = AtomicU8::new(0);
 
 const CSS: &str = r#"
 window.rd-overlay {
@@ -47,9 +54,81 @@ window.rd-dialog {
     font-size: 11px;
     opacity: 0.6;
 }
+
+/* Radial action overlay */
+window.rd-action-overlay {
+    background: transparent;
+}
+.rd-scrim {
+    background: rgba(4, 4, 6, 0.62);
+}
+.rd-panel {
+    background: #fbfaf9;
+    color: #1d1d1f;
+    border: 1px solid rgba(0, 0, 0, 0.07);
+    border-radius: 30px;
+    padding: 18px 28px 16px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.32);
+}
+.rd-panel-dark {
+    background: #1b1b1f;
+    color: #f5f5f7;
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+}
+.rd-panel.rd-drop-hot {
+    border: 2px solid #ff5a00;
+}
+.rd-tab {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 11px;
+    padding: 4px 10px;
+    min-height: 28px;
+    color: inherit;
+    box-shadow: none;
+}
+.rd-tab:hover {
+    background: alpha(currentColor, 0.07);
+}
+.rd-tab.active {
+    background: rgba(255, 90, 0, 0.10);
+    border-color: #ff5a00;
+}
+.rd-tab-label {
+    font-size: 11px;
+    font-weight: 500;
+}
+.rd-heading {
+    font-size: 30px;
+    font-weight: 700;
+}
+.rd-caption {
+    font-size: 12px;
+    opacity: 0.66;
+}
+.rd-key {
+    background: rgba(255, 90, 0, 0.12);
+    border: 1px solid rgba(255, 90, 0, 0.22);
+    border-radius: 10px;
+    padding: 6px 12px;
+}
+.rd-key-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #d9480f;
+}
+.rd-panel-dark .rd-key-label {
+    color: #ff8a4c;
+}
+.rd-status {
+    font-size: 12px;
+    color: #c2410c;
+}
 "#;
 
 pub fn install_css() {
+    refresh_dark();
     let provider = CssProvider::new();
     provider.load_from_string(CSS);
     if let Some(display) = gdk::Display::default() {
@@ -62,6 +141,21 @@ pub fn install_css() {
 }
 
 pub fn is_dark() -> bool {
+    DARK.load(Ordering::Relaxed)
+}
+
+/// Recomputes the effective colour scheme; called at startup and whenever the
+/// user changes the theme preference.
+pub fn refresh_dark() {
+    DARK.store(detect_dark(), Ordering::Relaxed);
+}
+
+fn detect_dark() -> bool {
+    match PREFERENCE.load(Ordering::Relaxed) {
+        1 => return false,
+        2 => return true,
+        _ => {}
+    }
     let settings = gtk::Settings::default();
     let theme = settings
         .as_ref()
@@ -71,19 +165,48 @@ pub fn is_dark() -> bool {
     let prefer_dark = settings
         .as_ref()
         .is_some_and(|settings| settings.is_gtk_application_prefer_dark_theme());
-    prefer_dark || theme.contains("dark")
+    prefer_dark || theme.contains("dark") || kde_dark_scheme()
+}
+
+/// GTK on Plasma does not always expose the colour scheme, so consult the
+/// active KDE colour scheme as a fallback.
+fn kde_dark_scheme() -> bool {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+        });
+    let Some(base) = base else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(base.join("kdeglobals")) else {
+        return false;
+    };
+    text.lines()
+        .find_map(|line| line.strip_prefix("ColorScheme="))
+        .map(|scheme| scheme.to_ascii_lowercase().contains("dark"))
+        .unwrap_or(false)
 }
 
 /// Applies the user's theme preference. `System` leaves GTK's default
 /// (which follows the desktop's GTK theme/portal) untouched.
 pub fn apply_theme(theme: Theme) {
+    PREFERENCE.store(
+        match theme {
+            Theme::System => 0,
+            Theme::Light => 1,
+            Theme::Dark => 2,
+        },
+        Ordering::Relaxed,
+    );
     if let Some(settings) = gtk::Settings::default() {
         match theme {
-            Theme::System => settings.set_gtk_application_prefer_dark_theme(false),
+            Theme::System => {}
             Theme::Light => settings.set_gtk_application_prefer_dark_theme(false),
             Theme::Dark => settings.set_gtk_application_prefer_dark_theme(true),
         }
     }
+    refresh_dark();
 }
 
 pub fn parse_hex(color: &str) -> (f64, f64, f64) {
