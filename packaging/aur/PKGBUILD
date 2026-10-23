@@ -16,7 +16,7 @@ depends=(
 makedepends=('cargo' 'rust')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver/$pkgname-$pkgver.tar.gz")
 # TODO: update sha256 after first release tag
-sha256sums=('8183eacf4b33989cda460701a1e9fd24e52f335c023ad0db29764de3dc6d3e7a')
+sha256sums=('02328ccb51fba37a5b3327cf0ca0f86780721b0e0b1b2168f5e1702e862f0595')
 
 prepare() {
     cd "$pkgname-$pkgver"
