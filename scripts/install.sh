@@ -26,12 +26,9 @@ ICONS="$SHARE/icons/hicolor/scalable/apps"
 
 # ── Check dependencies ────────────────────────────────────────────────────────
 missing=()
-for pkg in gtk4 xdg-utils; do
-    pkg-config --exists "$pkg" 2>/dev/null || missing+=("$pkg dev headers")
-done
-if ! pkg-config --exists gtk4-layer-shell-0 2>/dev/null; then
-    missing+=("gtk4-layer-shell")
-fi
+pkg-config --exists gtk4 2>/dev/null || missing+=("gtk4")
+pkg-config --exists gtk4-layer-shell-0 2>/dev/null || missing+=("gtk4-layer-shell")
+command -v xdg-open >/dev/null 2>&1 || missing+=("xdg-utils")
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "ERROR: missing dependencies: ${missing[*]}"
     echo "  Install with: sudo pacman -S gtk4 gtk4-layer-shell"
