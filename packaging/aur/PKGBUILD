@@ -15,10 +15,13 @@ depends=(
 )
 optdepends=(
     'imagemagick: HEIC/AVIF/PDF image output and extra input formats'
-    'ffmpeg: video and audio conversions'
-    'poppler: PDF to image/text conversions'
+    'ffmpeg: video and audio conversions, trim/split/snapshot tools'
+    'poppler: PDF to image/text conversions and page-level PDF tools'
+    'ghostscript: PDF compression'
     'libreoffice-fresh: document, slide and spreadsheet conversions (libreoffice-still also works)'
     'pandoc: document and EPUB to Markdown conversions'
+    '7zip: 7Z and RAR extraction'
+    'kdeconnect: Send action over the local network'
 )
 makedepends=('cargo' 'rust')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver/$pkgname-$pkgver.tar.gz")

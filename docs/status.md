@@ -6,7 +6,7 @@ sudah terbukti, apa yang belum, dan apa berikutnya.
 
 ## Snapshot
 
-- Tanggal: 2026-10-23
+- Tanggal: 2026-10-25
 - Versi: 0.1.0 (schema config 3)
 - Platform terverifikasi: CachyOS, KDE Plasma 6, Wayland, GTK 4.20 / layer-shell
 - Fokus: Linux tahap 1 selesai; Windows/macOS belum dimulai
@@ -15,10 +15,15 @@ sudah terbukti, apa yang belum, dan apa berikutnya.
 
 Tahap Linux sudah mencakup dua alur utama:
 
-1. **Quick actions** — roda konversi file/arsip, drag & drop, multi-kategori, konversi
-   lokal, service menu Dolphin.
+1. **Quick actions** — satu roda dengan tiga mode:
+   - *Convert*: konversi file/arsip, drag & drop, multi-kategori, service menu Dolphin.
+   - *Tools*: 26 file tool lokal dengan form parameter (compress, crop, edit, annotate,
+     frame, redact, PDF, video, audio, arsip).
+   - *Actions*: Copy, Move, Copy Path, Terminal, Send (KDE Connect), Float.
 2. **Project folders** — roda folder per project, filter, keyboard, terminal, clipboard,
    multi-project, kelola folder (rename, warna, urutan, buka/salin), dan hotkey terpisah.
+
+Ditambah **Float shelf**: jendela mengambang berisi file, tiap baris drag source nyata.
 
 Keduanya memakai overlay layer-shell dengan panel yang mengikuti tema sistem. Dua shortcut
 global didaftarkan melalui XDG GlobalShortcuts portal.
@@ -29,7 +34,7 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 |---|---|
 | `cargo fmt --all` | bersih |
 | `cargo clippy --workspace --all-targets -- -D warnings` | bersih |
-| `cargo test --workspace` | 49 lulus (41 core + 8 app) |
+| `cargo test --workspace` | 53 lulus (44 core + 9 app) |
 | `cargo build --release --locked` | lulus |
 | Dua shortcut portal | `Ctrl+Alt+Space` → quick actions, `Ctrl+Alt+Q` → project folders |
 | Klik luar lalu satu kali hotkey | membuka overlay kembali (regresi fixed) |
@@ -49,6 +54,15 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 | Idle RAM (release, hidden, Cairo) | 53 MB RSS saat start |
 | RAM setelah window pertama | 67–87 MB RSS |
 | Window settings ditutup & dibuka ulang | tidak crash; referensi dibersihkan |
+| 26 file tool via `examples/tool_smoke` | 24 sukses; 2 penolakan input benar (`extract_archive` pada `.md`) |
+| `join_videos` dua klip | `joined.mp4` setelah path concat dibuat absolut |
+| Form Compress (kualitas 60) dari UI | `photo-compressed.png` 96×64 tertulis |
+| Mode Actions: Copy Path | clipboard berisi path absolut |
+| Mode Actions: Float | shelf 340×420, baris `photo.png`, tombol tutup per baris |
+| Roda Tools di Wayland | screenshot: 8 tool gambar untuk kategori Images |
+| `Ctrl+A` di form | memilih teks; mode tidak berpindah ke Actions |
+| Overlay X11 | fullscreen pada monitor pointer (1920×1080 eDP-1) |
+| Layer-shell dua monitor | roda muncul di monitor tempat pointer berada |
 | Binary release | 6.5 MiB, stripped |
 
 Catatan: konversi tidak berubah pada iterasi ini; hasil sebelumnya tetap berlaku selama
@@ -85,13 +99,17 @@ tidak ada perubahan pada `deck-core::convert`.
 
 ## Known issues / batasan
 
-- Wayland tidak memberi posisi kursor global; panel selalu di tengah output aktif.
-- X11 fallback belum memposisikan overlay di kursor (jendela biasa); posisi overlay
-  bergantung pada window manager.
+- Wayland tidak memberi posisi kursor global; panel berada di tengah monitor yang berisi
+  pointer (`set_monitor`), bukan di titik kursor.
+- X11 fallback mengisi seluruh monitor pointer (bukan jendela kecil di kursor); posisi
+  absolut tidak tersedia di GTK4 lintas backend.
 - GTK masih mencatat warning `slider min width -2` saat window Manage dibuka; berasal dari
   tema sistem, bukan CSS aplikasi.
 - Flatpak masih WIP; konverter host belum diakses dari sandbox.
-- File tools Tangerine (crop/trim/split/merge/compress dengan preview) belum ada.
+- File tool berjalan sinkron di thread kerja; belum ada preview sebelum eksekusi dan
+  belum ada progres per persen untuk file besar.
+- Drag keluar dari baris Float bergantung pada file manager tujuan yang menerima
+  `text/uri-list`.
 - Windows dan macOS belum diimplementasikan; lihat `docs/roadmap.md`.
 - Portal KDE meminta konfirmasi satu kali untuk shortcut baru (`projects`).
 - Jika compositor tidak mendukung layer-shell, aplikasi memakai jendela biasa; fokus
@@ -104,7 +122,8 @@ tidak ada perubahan pada `deck-core::convert`.
 | P0 | Uji settings ganti shortcut lewat portal | binding baru aktif dan tersimpan |
 | P1 | Uji tray + autostart setelah perubahan label shortcut | menu/tooltip benar, login autostart tetap toggle |
 | P1 | Audit CSS switch GTK (`slider min width`) | tidak ada warning GTK saat settings dibuka |
-| P1 | File tools inti (compress/crop/trim) | preview + eksekusi lokal + tes |
+| P1 | Preview sebelum eksekusi tool | form menampilkan hasil sementara sebelum menulis |
+| P1 | Progres per file untuk tool panjang | status per file, bisa dibatalkan |
 | P1 | Windows shell (Tauri v2) memakai `deck-core` | overlay, dua hotkey, tray, launch folder, installer |
 | P2 | macOS shell | `LSUIElement`, panel non-activating, dua hotkey, tray, notarization |
 | P2 | Flatpak | konverter tersedia atau `flatpak-spawn --host` dengan izin jelas |

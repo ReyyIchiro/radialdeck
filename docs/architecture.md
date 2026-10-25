@@ -57,10 +57,17 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
   `KeyboardMode::Exclusive`, `namespace=radial-deck`, `exclusive_zone=-1`.
 - Surface menutupi satu output (output aktif dipilih KWin). Latar transparan digambar
   sendiri: backdrop gelap + wheel, sehingga klik di luar wheel dapat menutup panel.
-- Wayland tidak mengizinkan query posisi pointer global. Wheel diposisikan di tengah
-  output. Di X11 (fallback) aplikasi memakai jendela biasa 760×760; posisi kursor belum
-  dipakai karena GTK4 tidak menyediakan move window lintas backend — dicatat sebagai
-  keterbatasan.
+- Wayland tidak mengizinkan query posisi pointer global. Yang tersedia adalah
+  `gdk_display_get_monitor_at_surface(pointer surface)`, jadi `surface.rs` memilih monitor
+  yang sedang ditunjuk pointer lalu memanggil `set_monitor` sebelum surface tampil; wheel
+  berada di tengah monitor itu, bukan di titik kursor. Tanpa ini compositor memilih output
+  default, sehingga pada dua monitor roda bisa muncul di layar yang salah.
+- `gtk4_layer_shell::is_supported()` bernilai true juga di X11 (library terpasang), padahal
+  `init_layer_shell` di sana hanya menghasilkan GTK critical dan surface tidak pernah
+  di-map. `surface::layer_shell_available()` karena itu memeriksa nama display Wayland
+  lebih dulu. Di X11 aplikasi memakai jendela biasa yang di-`fullscreen_on_monitor` pada
+  monitor pointer; posisi kursor tetap tidak dipakai karena GTK4 tidak menyediakan move
+  window lintas backend — dicatat sebagai keterbatasan.
 - Keyboard exclusive memberi fokus penuh saat panel tampil; `Esc` selalu menutup.
 - **Invariant lifecycle:** satu-satunya pemilik visibilitas adalah controller/launcher.
   Handler klik luar dan `Esc` mengirim `Dismiss` ke controller, bukan memanggil
@@ -95,6 +102,45 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
   `ActionRequest::Dismiss` ke controller; klik di dalam wedge tidak menutup panel.
 - Panel selalu memakai kelas `.rd-panel` dan palet `action_wheel::palette()`; roda folder
   memakai komponen/ warna yang sama agar light/dark konsisten.
+
+## Mode roda: Convert, Tools, Actions
+
+- Satu `ActionLauncher` merender tiga mode; `WheelMode` menentukan isi wedge, caption, dan
+  aksi klik. `Shift` → Convert, `Super` → Tools, `Ctrl` → Actions; `F1`–`F3` adalah
+  alternatif agar tetap bisa dipakai pada keyboard tanpa modifier tersebut.
+- Mode hotkey hanya aktif saat tidak ada form terbuka. Form mengklaim keyboard: `Ctrl+A`
+  harus memilih teks, bukan berpindah ke Actions. Sebelum perbaikan ini `Ctrl+A` saat
+  mengedit kualitas melempar pengguna ke roda Actions dan menjalankan Float.
+- `Enter`/`Esc` di dalam form dikirim sebagai `ToolRun`/`ToolCancel`; `Esc` tanpa form
+  mengirim `Dismiss`.
+- Mode Tools memakai `ToolId::available_for(category)`; mode Actions memakai daftar tetap
+  dengan `reason` per item (mis. **Send** redup tanpa perangkat KDE Connect).
+
+## File tools
+
+- `deck-core::tools` adalah lapisan domain tanpa UI: `ToolId`, `Field` (key, label, nilai
+  default, hint, pilihan), `availability`, `ToolRequest`, `ToolOutcome`.
+- Eksekusi memakai binary eksternal (`magick`/`convert`, `ffmpeg`/`ffprobe`, `gs`,
+  `pdfseparate`/`pdfunite`, `7z`/`7zz`) yang dipanggil via `Command` tanpa shell. Tidak ada
+  string dari input pengguna yang masuk ke command line sebagai argumen mentah: nilai
+  numerik di-parse, warna divalidasi `#rrggbb`, dan nama file selalu argumen terpisah.
+- Setiap tool menulis ke `unique_path`/`unique_dir` di folder sumber sehingga file yang
+  sudah ada tidak pernah ditimpa; kegagalan per file dikumpulkan di `ToolOutcome::failures`.
+- `ToolOutcome::merge` menggabungkan hasil beberapa tool/batch; `created` dipakai untuk
+  notifikasi dan pemilihan file baru.
+
+## Aksi file dan Float
+
+- `actions.rs` memegang operasi yang menyentuh desktop: buka folder (`xdg-open`), salin path,
+  salin file sebagai `text/uri-list`, terminal, KDE Connect, dan validasi nama executable.
+  Terminal dipilih dari tabel tetap dengan flag per terminal, sehingga preferensi pengguna
+  tidak bisa menyelundupkan argumen.
+- `float_shelf.rs` membuat jendela 340×420 tanpa dekorasi. Di Wayland ia layer-shell
+  `Overlay` + `KeyboardMode::OnDemand` yang di-anchor ke kanan atas monitor pointer; di X11
+  menjadi jendela biasa. Tiap baris adalah `DragSource` yang menyediakan `text/uri-list`,
+  jadi file bisa ditarik kembali ke file manager.
+- Shelf dipakai ulang antar pemanggilan; bila window destroyed (compositor restart),
+  controller membuat ulang saat **Float** dipilih lagi.
 
 ## Roda folder proyek
 
@@ -143,9 +189,13 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
 
 ## Keamanan
 
-- Tidak ada shell. `xdg-open`, terminal, dan seluruh konverter dipanggil dengan `Command`
-  + argv; nama executable konverter berasal dari konstanta, target id berasal dari registry
-  tetap, dan path file menjadi argumen terpisah (tanpa escaping shell).
+- Tidak ada shell. `xdg-open`, terminal, seluruh konverter, dan seluruh file tool dipanggil
+  dengan `Command` + argv; nama executable berasal dari konstanta, target/tool id berasal
+  dari registry tetap, dan path file menjadi argumen terpisah (tanpa escaping shell).
+- Nilai form divalidasi sebelum masuk argv: angka di-parse, rasio/persentase dihitung
+  terhadap dimensi sumber, warna harus `#rrggbb`, dan pilihan berasal dari daftar `Field`.
+  Nama terminal dari settings harus nama executable polos (tanpa `/`, spasi, atau flag).
+- Device id KDE Connect divalidasi sebagai hex sebelum dikirim ke `kdeconnect-cli`.
 - Path sumber divalidasi ada dan dinormalisasi; output selalu di direktori sumber dan
   operasi menolak menimpa file yang sudah ada.
 - Format target tidak dapat diinjeksi dari CLI; hanya id yang ada di registry kategori
@@ -179,13 +229,22 @@ crates/deck-core/src/
 ├── convert/image.rs     # native image crate + ImageMagick fallback
 ├── convert/external.rs  # ffmpeg, pdftoppm/pdftotext, LibreOffice, pandoc
 ├── convert/archive.rs   # ZIP/TAR/GZIP (compress + extract)
-└── convert/mod.rs       # orkestrasi batch, Outcome, naming
+├── convert/mod.rs       # orkestrasi batch, Outcome, naming
+├── tools/mod.rs         # ToolId, Field, availability, execute, ToolOutcome
+├── tools/image.rs       # compress, crop, edit, annotate, frame, redact, collage
+├── tools/media.rs       # video/audio: trim, crop, split, speed, snapshot, join, mute
+├── tools/pdf.rs         # create/merge/split/organize, extract archive
+├── tools/shell.rs       # deteksi binary, eksekusi, unique path, parsing nilai
+└── file_actions.rs      # copy/move/trash tanpa shell (dipakai mode Actions)
 
 crates/radial-deck/src/
 ├── main.rs              # GtkApplication, single instance, CLI
 ├── controller.rs        # state + semua mutasi + jembatan UI + worker konversi
-├── action_launcher.rs   # overlay panel konversi, tab, drag & drop, dismiss
+├── action_launcher.rs   # overlay panel konversi, tab, mode, form, drag & drop
 ├── action_wheel.rs      # roda konversi Cairo, hit-test, keyboard, hover
+├── actions.rs           # aksi desktop: clipboard, terminal, KDE Connect, validasi
+├── float_shelf.rs       # jendela Float, baris drag source
+├── surface.rs           # deteksi layer-shell + penempatan monitor pointer
 ├── launcher.rs          # layer-shell overlay roda folder + rail project
 ├── wheel.rs             # roda folder: drawing, hit-test, context menu
 ├── project_tabs.rs      # tab project, overflow +N, sinkronisasi state

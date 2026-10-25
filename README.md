@@ -20,6 +20,11 @@ kanan file di Dolphin untuk langsung membuka roda konversi.
 |---|---|
 | Roda konversi radial (Wayland layer-shell, Cairo) | ✅ |
 | 10 kategori: gambar, video, audio, PDF, dokumen, slide, spreadsheet, EPUB, subtitle, arsip | ✅ |
+| Tiga mode roda: **Convert** (`Shift`), **Tools** (`Super`), **Actions** (`Ctrl`) | ✅ |
+| 26 file tools lokal: compress, crop, edit, annotate, frame, redact, PDF merge/split/organize, video trim/crop/split/speed/snapshot/join/mute/redact, audio trim/normalize/channel/redact/visualizer | ✅ |
+| Form parameter per tool dengan validasi dan nilai default | ✅ |
+| Aksi file: Copy, Move, Copy Path, Terminal, Send (KDE Connect), Float | ✅ |
+| Float shelf: jendela mengambang untuk menampung file, tiap baris bisa di-drag keluar | ✅ |
 | Drag & drop file ke panel; multi-file / mixed selection | ✅ |
 | Format yang tidak tersedia ditandai redup + alasan (tooltip/status) | ✅ |
 | Klik kanan file di Dolphin → **RadialDeck actions…** | ✅ |
@@ -51,6 +56,9 @@ kanan file di Dolphin untuk langsung membuka roda konversi.
   - `libreoffice` — dokumen, slide, spreadsheet (ekspor EPUB memakai filter EPUB
     bawaan LibreOffice; build yang tidak menyertakannya akan melaporkan error)
   - `pandoc` — dokumen/EPUB → Markdown
+  - `ghostscript` — kompres PDF
+  - `7zip` — ekstrak arsip 7Z/RAR
+  - `kdeconnect` — aksi **Send** (opsional, tanpa ini wedge redup)
   - Arsip (ZIP/TAR/GZIP) ditangani native oleh Rust, tanpa binary eksternal.
     GZIP pada satu file menghasilkan `.gz`; pada folder/arsip menghasilkan
     `.tar.gz`.
@@ -94,6 +102,9 @@ install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 | Perintah | Aksi |
 |---|---|
 | `radial-deck FILE...` | Buka roda konversi untuk file/drag selection |
+| `radial-deck --convert FILE...` | Paksa mode Convert |
+| `radial-deck --tools FILE...` | Buka langsung di mode Tools |
+| `radial-deck --actions FILE...` | Buka langsung di mode Actions |
 | `radial-deck --show` | Buka roda konversi kosong |
 | `radial-deck --projects` | Buka roda folder proyek |
 | `radial-deck --hidden` | Mulai tersembunyi di tray (autostart) |
@@ -108,7 +119,8 @@ install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 |---|---|
 | `Ctrl+Alt+Space` | Toggle roda quick actions (global) |
 | `Ctrl+Alt+Q` | Toggle roda project folders (global) |
-| Panah / scroll | Pilih format atau folder |
+| `Shift` / `Super` / `Ctrl` | Ganti mode Convert / Tools / Actions |
+| Panah / scroll | Pilih format, tool, aksi, atau folder |
 | `1`–`9` | Jalankan item ke-N |
 | `Enter` | Terapkan format / buka folder |
 | `Esc` / klik area gelap | Tutup roda (state tetap konsisten) |
@@ -141,6 +153,39 @@ menampilkan ringkasan sukses/gagal.
 | Archives | ZIP, TAR, GZIP, EXTRACT |
 
 Beberapa target memerlukan tool eksternal; roda menampilkan alasan bila tidak tersedia.
+
+### Tools
+
+Tekan `Super` (atau klik tab **Tools**) untuk mengganti isi roda dengan tool yang berlaku
+untuk kategori file aktif. Tool yang butuh parameter membuka form di dalam panel; `Enter`
+menjalankan, `Esc` kembali ke roda. Selama form terbuka, `Ctrl`/`Shift`/`Super` tetap
+menjadi modifier teks dan tidak mengganti mode.
+
+Semua tool menulis hasil di folder yang sama dengan sumber, memakai nama unik, dan tidak
+pernah menimpa file yang ada. Contoh: **Compress** (kualitas gambar / CRF video / bitrate
+audio / preset PDF), **Crop**, **Edit** (brightness, contrast, saturation, rotate, flip),
+**Annotate**, **Frame**, **Redact**, **Create PDF**, **Merge PDFs**, **Split PDF**,
+**Organize PDF**, **Join Videos**, **Trim**, **Crop Video**, **Change Speed**,
+**Snapshots**, **Split Video**, **Mute**, **Normalize Audio**, **Channels**,
+**Audio → Video**, **Extract Archive**.
+
+### Actions
+
+Tekan `Ctrl` (atau klik tab **Actions**):
+
+| Aksi | Perilaku |
+|---|---|
+| Copy | Menyalin file sebagai `text/uri-list`, bisa di-paste di Dolphin |
+| Move | Memindahkan file ke folder pilihan (chooser) |
+| Copy Path | Menyalin path absolut ke clipboard |
+| Terminal | Membuka terminal di folder file pertama |
+| Send | Mengirim lewat KDE Connect; redup bila tidak ada perangkat |
+| Float | Menampilkan *Float shelf* berisi file tersebut |
+
+Float shelf adalah jendela mengambang 340×420 di pojok kanan atas: daftar file, tombol tutup
+per baris, dan setiap baris adalah drag source sungguhan sehingga bisa ditarik kembali ke
+Dolphin atau aplikasi lain. Di Wayland ia memakai layer-shell (`OnDemand`), di X11 menjadi
+jendela biasa.
 
 ### Folder proyek
 
@@ -195,10 +240,14 @@ crates/
 │       ├── external.rs        # ffmpeg, pdftoppm, LibreOffice, pandoc
 │       ├── archive.rs         # zip/tar/gzip
 │       └── mod.rs             # orkestrasi batch + Outcome
+│   ├── tools/                 # 26 file tool lokal (image, media, pdf, shell)
+│   └── file_actions.rs        # copy/move/trash helpers tanpa shell
 └── radial-deck/               # shell Linux
     └── src/
         ├── action_wheel.rs    # roda konversi Cairo: gambar, hit-test, input
-        ├── action_launcher.rs # panel overlay, tab kategori, drag & drop
+        ├── action_launcher.rs # panel overlay, tab kategori, mode, form, drag & drop
+        ├── float_shelf.rs     # jendela Float + baris drag source
+        ├── surface.rs         # deteksi layer-shell + penempatan monitor
         ├── controller.rs      # state, CLI single-instance, thread konversi
         ├── launcher.rs        # overlay roda folder + rail project
         ├── wheel.rs           # roda folder (Cairo), target tunggal, menu
@@ -236,7 +285,7 @@ CI menjalankan fmt, clippy, test, dan build release di Ubuntu 24.04.
 
 | Test | Hasil |
 |---|---|
-| Unit test | ✅ 45 lulus (`deck-core` 40, app 5) |
+| Unit test | ✅ 53 lulus (`deck-core` 44, app 9) |
 | fmt + clippy `-D warnings` | ✅ bersih |
 | Layer-shell roda konversi + roda folder | ✅ screenshot KDE Wayland |
 | Dua hotkey portal | ✅ `Ctrl+Alt+Space` dan `Ctrl+Alt+Q` aktif bersamaan |
@@ -252,19 +301,30 @@ CI menjalankan fmt, clippy, test, dan build release di Ubuntu 24.04.
 | Single instance + argumen file | ✅ proses kedua meneruskan file ke proses utama |
 | Idle RAM (release, hidden, Cairo) | 53 MB RSS saat start |
 | RAM setelah window pertama | 67–87 MB RSS (Cairo) |
+| 26 tool: smoke engine (`deck-core/examples/tool_smoke`) | ✅ 24 sukses, 2 kegagalan input yang memang ditolak |
+| Form tool: Compress PNG kualitas 60 | ✅ `photo-compressed.png` 96×64 ditulis dari form |
+| Mode Actions: Copy Path | ✅ clipboard berisi path absolut file |
+| Mode Actions: Float | ✅ shelf 340×420 berisi baris `photo.png` |
+| Roda Tools di Wayland | ✅ screenshot: 8 tool gambar + caption |
+| Form menahan `Ctrl`/`Shift`/`Super` | ✅ `Ctrl+A` memilih teks, mode tidak berpindah |
+| Overlay X11 mengikuti monitor kursor | ✅ 1920×1080 penuh di eDP-1, bukan monitor lain |
+| Layer-shell di-anchor ke monitor kursor | ✅ roda muncul di monitor tempat pointer berada |
 | Binary release | 6.5 MiB (stripped) |
 
 ---
 
 ## Keterbatasan
 
-- Posisi panel di tengah output; Wayland tidak mengekspos posisi kursor global.
+- Wayland tidak mengekspos posisi kursor global, jadi roda membuka di tengah monitor yang
+  berisi pointer (bukan di titik kursor). X11 fallback mengisi monitor tersebut.
 - Shortcut dipegang portal sehingga butuh persetujuan KDE satu kali saat pertama kali
   binding project ditambahkan.
-- Konversi memerlukan tool eksternal; Flatpak sandbox belum dapat memakai binary host
-  (manifest masih WIP, lihat `packaging/flatpak/`).
-- File tools Tangerine (crop, trim, merge, dll.) belum diimplementasikan; fokus tahap ini
-  adalah konversi format dan aksi arsip.
+- Konversi dan tools memerlukan tool eksternal; Flatpak sandbox belum dapat memakai binary
+  host (manifest masih WIP, lihat `packaging/flatpak/`).
+- Tool berjalan sinkron di thread kerja; file besar membuat status "running" bertahan
+  sampai proses eksternal selesai.
+- Drag keluar dari baris Float bergantung pada file manager tujuan yang menerima
+  `text/uri-list`.
 
 ---
 
@@ -272,7 +332,7 @@ CI menjalankan fmt, clippy, test, dan build release di Ubuntu 24.04.
 
 Lihat [`docs/roadmap.md`](docs/roadmap.md) untuk keputusan dan kriteria tiap platform.
 Ringkasnya: Windows memakai shell Tauri v2 + WebView2 dengan backend `deck-core`; macOS
-memakai AppKit/SwiftUI native + `NSPanel`/Carbon hotkey. File tools dengan preview dan
+memakai AppKit/SwiftUI native + `NSPanel`/Carbon hotkey. Preview sebelum eksekusi tool dan
 Flatpak adalah pekerjaan Linux berikutnya.
 
 ---
