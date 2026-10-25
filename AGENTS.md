@@ -20,7 +20,7 @@ Dokumen ini adalah titik masuk untuk kontributor manusia maupun agen AI. Baca be
 | `crates/radial-deck/` | Shell Linux GTK4: overlay layer-shell, roda Cairo, manage, settings, hotkey portal, tray |
 | `docs/` | Riset, arsitektur, status hidup, roadmap |
 | `packaging/` | Desktop entry, service menu Dolphin, PKGBUILD/AUR, Flatpak (WIP) |
-| `scripts/` | `install.sh`, `uninstall.sh` user-local |
+| `scripts/` | `install.sh`, `uninstall.sh` user-local, `ui-smoke.sh` (sesi KWin virtual) |
 
 `deck-core` tidak boleh bergantung pada GTK, Wayland, portal, atau path Linux. Shell
 platform baru harus memakai crate core ini, bukan menduplikasi model/persistensi/konversi.
@@ -34,10 +34,11 @@ cargo test --workspace
 cargo build --release --locked
 ```
 
-Perubahan UI harus diuji di sesi nyata (KDE Wayland). Minimal: buka/tutup overlay lewat
-hotkey, klik luar, `Esc`, manage, settings, dan launch folder. Jangan mengklaim UI berhasil
-hanya dari kompilasi. Untuk perubahan konversi, jalankan satu konversi nyata dan periksa
-file hasil.
+Perubahan UI diuji lebih dulu dengan `scripts/ui-smoke.sh` (sesi KWin virtual: layar dan
+pointer pengguna tidak tersentuh). Setelah itu uji di sesi nyata (KDE Wayland) minimal:
+buka/tutup overlay lewat hotkey, klik luar, `Esc`, manage, settings, dan launch folder.
+Jangan mengklaim UI berhasil hanya dari kompilasi. Untuk perubahan konversi, jalankan satu
+konversi nyata dan periksa file hasil.
 
 ## Invariant yang mudah rusak
 

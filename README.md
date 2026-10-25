@@ -279,6 +279,22 @@ cargo run -p radial-deck -- --show /path/ke/file.png
 
 CI menjalankan fmt, clippy, test, dan build release di Ubuntu 24.04.
 
+### Uji UI tanpa mengganggu sesi
+
+`scripts/ui-smoke.sh` menjalankan aplikasi di dalam sesi KWin virtual
+(`kwin_wayland --virtual`), jadi overlay, layer-shell, dan Float shelf dirender ke
+framebuffer offscreen. Layar, pointer, dan fokus keyboard Anda tidak tersentuh.
+
+```bash
+cargo build --release
+scripts/ui-smoke.sh          # 15 pemeriksaan, exit 1 bila ada yang gagal
+scripts/ui-smoke.sh --keep   # simpan screenshot + log di /tmp/radial-deck-ui-smoke
+```
+
+Dua lane yang diuji: **wayland** (overlay benar-benar ter-map dan tergambar, dibuktikan
+screenshot) dan **x11** (form tool, Float shelf, `Esc`, lewat Xwayland bersarang).
+Butuh `kwin_wayland`, `spectacle`, `xdotool`, dan `magick`.
+
 ---
 
 ## Status Verifikasi
@@ -309,7 +325,8 @@ CI menjalankan fmt, clippy, test, dan build release di Ubuntu 24.04.
 | Form menahan `Ctrl`/`Shift`/`Super` | ✅ `Ctrl+A` memilih teks, mode tidak berpindah |
 | Overlay X11 mengikuti monitor kursor | ✅ 1920×1080 penuh di eDP-1, bukan monitor lain |
 | Layer-shell di-anchor ke monitor kursor | ✅ roda muncul di monitor tempat pointer berada |
-| Binary release | 6.5 MiB (stripped) |
+| `scripts/ui-smoke.sh` (sesi KWin virtual) | ✅ 15/15 lulus tanpa menyentuh layar nyata |
+| Binary release | 6.8 MiB (stripped) |
 
 ---
 
