@@ -11,8 +11,11 @@
 #   wayland  - layer-shell overlay actually maps and draws (screenshot proof)
 #   x11      - keyboard-driven flows: tool form submission, Float, Esc
 #
-# Usage: scripts/ui-smoke.sh [--keep]
-#   --keep   keep the artifact directory instead of leaving only the report
+# Usage: scripts/ui-smoke.sh
+#
+# Artifacts stay in $RADIAL_DECK_SMOKE_OUT (default /tmp/radial-deck-ui-smoke):
+# screenshots, the app log and the compositor log. Only the private runtime
+# directory and the scratch conversion files are removed.
 #
 # Exit status: 0 when every check passes, 1 otherwise.
 
@@ -21,8 +24,6 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/target/release/radial-deck"
 OUT="${RADIAL_DECK_SMOKE_OUT:-${TMPDIR:-/tmp}/radial-deck-ui-smoke}"
-KEEP=0
-[[ "${1:-}" == "--keep" ]] && KEEP=1
 
 FAILURES=0
 CHECKS=0
@@ -62,9 +63,7 @@ cleanup() {
         kill -0 "$KWIN_PID" 2>/dev/null || break
         sleep 0.1
     done
-    if [[ $KEEP -eq 0 ]]; then
-        rm -rf "$OUT/runtime" "$OUT/work"
-    fi
+    rm -rf "$OUT/runtime" "$OUT/work"
 }
 trap cleanup EXIT
 

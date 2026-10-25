@@ -288,12 +288,12 @@ framebuffer offscreen. Layar, pointer, dan fokus keyboard Anda tidak tersentuh.
 ```bash
 cargo build --release
 scripts/ui-smoke.sh          # 15 pemeriksaan, exit 1 bila ada yang gagal
-scripts/ui-smoke.sh --keep   # simpan screenshot + log di /tmp/radial-deck-ui-smoke
 ```
 
 Dua lane yang diuji: **wayland** (overlay benar-benar ter-map dan tergambar, dibuktikan
 screenshot) dan **x11** (form tool, Float shelf, `Esc`, lewat Xwayland bersarang).
-Butuh `kwin_wayland`, `spectacle`, `xdotool`, dan `magick`.
+Butuh `kwin_wayland`, `spectacle`, `xdotool`, dan `magick`. Screenshot serta log tersimpan
+di `/tmp/radial-deck-ui-smoke` (ubah dengan `RADIAL_DECK_SMOKE_OUT`).
 
 ---
 
