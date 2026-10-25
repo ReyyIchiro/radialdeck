@@ -8,12 +8,13 @@ use gtk4_layer_shell::LayerShell;
 /// `is_supported` also reports the library as available on X11, where calling
 /// `init_layer_shell` only logs a GTK critical and never maps a surface.
 pub fn layer_shell_available() -> bool {
-    if !gtk4_layer_shell::is_supported() {
-        return false;
-    }
-    gtk::gdk::Display::default()
+    // Check the display first: `is_supported` itself calls into the library's
+    // global initialiser, which asserts a Wayland display and logs a GTK
+    // critical when handed X11.
+    let wayland = gtk::gdk::Display::default()
         .map(|display| display.name().starts_with("wayland"))
-        .unwrap_or(false)
+        .unwrap_or(false);
+    wayland && gtk4_layer_shell::is_supported()
 }
 
 fn pointer_monitor() -> Option<gtk::gdk::Monitor> {
