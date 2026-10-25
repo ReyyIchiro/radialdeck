@@ -84,6 +84,64 @@ window.rd-action-overlay {
 .rd-panel.rd-drop-hot {
     border: 2px solid #ff5a00;
 }
+.rd-modes {
+    margin-bottom: 2px;
+}
+.rd-mode {
+    background: transparent;
+    border: 1px solid alpha(currentColor, 0.12);
+    border-radius: 9px;
+    padding: 3px 10px;
+    min-height: 26px;
+    font-size: 11px;
+    font-weight: 600;
+    color: inherit;
+    box-shadow: none;
+}
+.rd-mode:hover {
+    background: alpha(currentColor, 0.07);
+}
+.rd-mode.active {
+    background: rgba(255, 90, 0, 0.14);
+    border-color: #ff5a00;
+    color: #d9480f;
+}
+.rd-panel-dark .rd-mode.active {
+    color: #ff9a62;
+}
+.rd-form {
+    margin-top: 6px;
+    padding: 8px 6px 4px;
+}
+.rd-form-title {
+    font-size: 20px;
+    font-weight: 700;
+}
+.rd-form-hint {
+    font-size: 11px;
+    opacity: 0.6;
+}
+.rd-form-row {
+    min-height: 38px;
+}
+.rd-form-label {
+    font-size: 12px;
+    font-weight: 600;
+}
+.rd-form-button {
+    border-radius: 9px;
+    padding: 5px 14px;
+}
+.rd-form-run {
+    border-radius: 9px;
+    padding: 5px 18px;
+    background: #ff5a00;
+    color: white;
+    font-weight: 700;
+}
+.rd-form-run:hover {
+    background: #e65000;
+}
 .rd-tab {
     background: transparent;
     border: 1px solid transparent;
@@ -157,6 +215,38 @@ window.rd-action-overlay {
 .rd-status {
     font-size: 12px;
     color: #c2410c;
+}
+
+/* Float shelf */
+.rd-float-window {
+    background: transparent;
+}
+.rd-float-panel {
+    background: @theme_bg_color;
+    color: @theme_fg_color;
+    border: 1px solid alpha(currentColor, 0.14);
+    border-radius: 20px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.30);
+}
+.rd-float-header {
+    padding: 12px 14px 8px;
+}
+.rd-float-title {
+    font-size: 15px;
+    font-weight: 700;
+}
+.rd-float-row {
+    padding: 7px 8px;
+    border-radius: 9px;
+    background: alpha(currentColor, 0.04);
+}
+.rd-float-row:hover {
+    background: alpha(currentColor, 0.09);
+}
+.rd-float-empty {
+    font-size: 12px;
+    opacity: 0.55;
+    margin: 24px;
 }
 
 /* Management window */
