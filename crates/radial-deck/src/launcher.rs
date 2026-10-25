@@ -123,7 +123,7 @@ impl Launcher {
             }
         }));
 
-        let layer_shell = gtk4_layer_shell::is_supported();
+        let layer_shell = crate::surface::layer_shell_available();
         tracing::info!("layer-shell supported: {layer_shell}");
         if layer_shell {
             window.init_layer_shell();
@@ -240,6 +240,11 @@ impl Launcher {
         self.set_data(data);
         self.wheel.reset();
         self.visible.set(true);
+        if crate::surface::layer_shell_available() {
+            crate::surface::anchor_to_pointer_monitor(&self.window);
+        } else {
+            crate::surface::fill_monitor_for_pointer(&self.window);
+        }
         self.window.set_visible(true);
         self.window.present();
         self.wheel.focus();

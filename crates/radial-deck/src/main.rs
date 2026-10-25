@@ -3,12 +3,14 @@ mod action_wheel;
 mod actions;
 mod autostart;
 mod controller;
+mod float_shelf;
 mod hotkey;
 mod launcher;
 mod logging;
 mod manage;
 mod project_tabs;
 mod settings;
+mod surface;
 mod theme;
 mod tray;
 mod wheel;
@@ -86,9 +88,10 @@ fn main() -> gtk::glib::ExitCode {
     {
         let controller = controller.clone();
         app.connect_command_line(move |app, command_line| {
+            let arguments = command_line.arguments();
+            tracing::debug!("command line: {arguments:?}");
             let cli = controller::Cli::parse(
-                command_line
-                    .arguments()
+                arguments
                     .into_iter()
                     .skip(1)
                     .map(|arg| arg.to_string_lossy().into_owned()),
