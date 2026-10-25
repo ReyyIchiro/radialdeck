@@ -59,6 +59,7 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 | Form Compress (kualitas 60) dari UI | `photo-compressed.png` 96×64 tertulis |
 | Mode Actions: Copy Path | clipboard berisi path absolut |
 | `scripts/ui-smoke.sh` (KWin virtual, layar nyata tidak tersentuh) | 15/15: overlay Wayland ter-map & tergambar, form Compress menulis file, Float shelf 340×420, `Esc` menutup |
+| `ui-smoke.sh` isolasi bus | bus D-Bus privat; 0 proses tersisa, keluar 25 detik tanpa menggantung pipe |
 | Idle CPU (release, hidden) | 0,5% setelah 20 detik |
 | Mode Actions: Float | shelf 340×420, baris `photo.png`, tombol tutup per baris |
 | Roda Tools di Wayland | screenshot: 8 tool gambar untuk kategori Images |

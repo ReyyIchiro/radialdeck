@@ -7,6 +7,11 @@
 # spectacle against that nested compositor and input is injected through the
 # nested Xwayland server, which leaves the physical screen and pointer alone.
 #
+# The run also gets its own D-Bus session bus. Without it the application would
+# register a tray icon and post notifications on the real desktop, and every
+# service it activates would inherit this script's stdout, keeping a caller's
+# pipe open long after the checks finish.
+#
 # Lanes:
 #   wayland  - layer-shell overlay actually maps and draws (screenshot proof)
 #   x11      - keyboard-driven flows: tool form submission, Float, Esc
@@ -53,17 +58,58 @@ export RADIAL_DECK_NO_HOTKEY=1
 
 KWIN_PID=""
 APP_PID=""
+BUS_PID=""
+BUS_ADDRESS="unix:path=$OUT/bus"
+
+# Kills every process that belongs to this run: the compositor's helpers, portal
+# services, KDE Connect, spectacle's background daemon. They daemonise and get
+# reparented, so they outlive the bus and keep a caller's stdout pipe open.
+#
+# The bus address is matched as a prefix because D-Bus appends ",guid=...".
+# XDG_RUNTIME_DIR is matched as a second criterion; both are private to the run.
+reap_private_bus() {
+    local proc pid environ
+    for proc in /proc/[0-9]*; do
+        pid="${proc##*/}"
+        # This script exports both variables too; never reap itself.
+        [[ "$pid" == "$$" ]] && continue
+        environ="$proc/environ"
+        [[ -r "$environ" ]] || continue
+        environ="$(tr '\0' '\n' <"$environ" 2>/dev/null)" || continue
+        if grep -qF "DBUS_SESSION_BUS_ADDRESS=$BUS_ADDRESS" <<<"$environ" ||
+            grep -qxF "XDG_RUNTIME_DIR=$OUT/runtime" <<<"$environ"; then
+            kill -9 "$pid" 2>/dev/null
+        fi
+    done
+}
+
+start_private_bus() {
+    dbus-daemon --session --address="$BUS_ADDRESS" --nofork --nopidfile \
+        >"$OUT/bus.log" 2>&1 &
+    BUS_PID=$!
+    for _ in $(seq 50); do
+        [[ -S "$OUT/bus" ]] && break
+        sleep 0.1
+    done
+    [[ -S "$OUT/bus" ]] || { say "private session bus did not start"; return 1; }
+    export DBUS_SESSION_BUS_ADDRESS="$BUS_ADDRESS"
+}
 
 cleanup() {
     [[ -n "$APP_PID" ]] && kill -9 "$APP_PID" 2>/dev/null
     [[ -n "$KWIN_PID" ]] && kill -9 "$KWIN_PID" 2>/dev/null
+    # Services can be reactivated while the bus is still alive, so reap, drop the
+    # bus, then reap once more for anything that came up in between.
+    reap_private_bus
+    [[ -n "$BUS_PID" ]] && kill -9 "$BUS_PID" 2>/dev/null
+    reap_private_bus
     # Waiting on a killed compositor can hang on its still-open pipe, so reap
     # with a deadline instead of a bare `wait`.
     for _ in $(seq 20); do
         kill -0 "$KWIN_PID" 2>/dev/null || break
         sleep 0.1
     done
-    rm -rf "$OUT/runtime" "$OUT/work"
+    rm -rf "$OUT/runtime" "$OUT/work" "$OUT/bus"
 }
 trap cleanup EXIT
 
@@ -132,6 +178,7 @@ send_key() { xdotool key --clearmodifiers "$1"; }
 
 say "artifact directory: $OUT"
 
+start_private_bus || exit 1
 start_compositor || exit 1
 # Point every child, including spectacle, at the nested session. Inheriting the
 # real WAYLAND_DISPLAY would make captures silently target a socket that does

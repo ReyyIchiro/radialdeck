@@ -295,6 +295,11 @@ screenshot) dan **x11** (form tool, Float shelf, `Esc`, lewat Xwayland bersarang
 Butuh `kwin_wayland`, `spectacle`, `xdotool`, dan `magick`. Screenshot serta log tersimpan
 di `/tmp/radial-deck-ui-smoke` (ubah dengan `RADIAL_DECK_SMOKE_OUT`).
 
+Skrip ini juga membuat bus D-Bus sesi sendiri, jadi tray, notifikasi, portal, dan KDE
+Connect selama tes tidak menyentuh desktop Anda. Semua proses yang lahir di bus itu
+dimatikan saat selesai — termasuk service yang sempat daemonize — sehingga skrip keluar
+tanpa menggantung pipe pemanggilnya.
+
 ---
 
 ## Status Verifikasi
