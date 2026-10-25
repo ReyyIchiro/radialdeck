@@ -2,6 +2,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use gtk::gio;
+use gtk::glib::value::ToValue;
 use gtk::prelude::*;
 
 const TERMINALS: [&str; 8] = [
@@ -25,6 +27,89 @@ pub fn copy_path_to_clipboard(path: &Path) {
     if let Some(display) = gtk::gdk::Display::default() {
         display.clipboard().set_text(&path.to_string_lossy());
     }
+}
+
+pub fn copy_paths_to_clipboard(paths: &[PathBuf]) {
+    if let Some(display) = gtk::gdk::Display::default() {
+        let text = paths
+            .iter()
+            .map(|path| path.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("\n");
+        display.clipboard().set_text(&text);
+    }
+}
+
+/// Puts real file references on the desktop clipboard. Dolphin, Nautilus and
+/// other file managers receive `text/uri-list` through GTK's content provider.
+pub fn copy_files_to_clipboard(paths: &[PathBuf]) -> Result<(), String> {
+    let display = gtk::gdk::Display::default()
+        .ok_or_else(|| "No desktop clipboard is available".to_owned())?;
+    let files = paths.iter().map(gio::File::for_path).collect::<Vec<_>>();
+    let list = gtk::gdk::FileList::from_array(&files);
+    let value = list.to_value();
+    let provider = gtk::gdk::ContentProvider::for_value(&value);
+    display
+        .clipboard()
+        .set_content(Some(&provider))
+        .map_err(|error| format!("Could not copy files: {error}"))
+}
+
+#[derive(Debug, Clone)]
+pub struct KdeDevice {
+    pub id: String,
+    pub name: String,
+}
+
+/// Reads reachable, paired KDE Connect devices. This is the Linux counterpart
+/// of AirDrop; it is invoked only when the actions wheel opens.
+pub fn kdeconnect_devices() -> Vec<KdeDevice> {
+    let Some(binary) = find_in_path("kdeconnect-cli") else {
+        return Vec::new();
+    };
+    let Ok(output) = Command::new(binary)
+        .args(["--list-available", "--id-name-only"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (id, name) = line.trim().split_once(' ')?;
+            if id.is_empty() || name.trim().is_empty() {
+                return None;
+            }
+            Some(KdeDevice {
+                id: id.to_owned(),
+                name: name.trim().to_owned(),
+            })
+        })
+        .collect()
+}
+
+pub fn share_via_kdeconnect(paths: &[PathBuf], device: &str) -> Result<(), String> {
+    if !is_valid_executable_name(device) && !device.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("Invalid device id".into());
+    }
+    let binary =
+        find_in_path("kdeconnect-cli").ok_or_else(|| "KDE Connect is not installed".to_owned())?;
+    for path in paths {
+        let output = Command::new(&binary)
+            .arg("--share")
+            .arg(path)
+            .arg("-d")
+            .arg(device)
+            .output()
+            .map_err(|error| format!("KDE Connect: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        }
+    }
+    Ok(())
 }
 
 pub fn available_terminals() -> Vec<&'static str> {

@@ -31,6 +31,10 @@ pub struct WheelState {
     pub targets: Vec<WheelTarget>,
     pub source_label: String,
     pub empty_hint: String,
+    /// Shown under the wheel while nothing is hovered.
+    pub caption: String,
+    /// Prepended to the hovered label, e.g. `Convert to`.
+    pub hover_prefix: String,
 }
 
 #[derive(Debug, Clone)]
@@ -499,19 +503,12 @@ fn draw(
     cr.set_line_width(1.0);
     cr.stroke().ok();
 
-    let center_label = match interaction.hover {
-        Some(index) => state
-            .targets
-            .get(index)
-            .map(|target| target.label.clone())
-            .unwrap_or_else(|| state.source_label.clone()),
-        None => {
-            if state.source_label.is_empty() {
-                "DROP".into()
-            } else {
-                state.source_label.clone()
-            }
-        }
+    // The hovered wedge already shows its own label; the hub stays on the
+    // dropped source so hovering never hides what is being acted on.
+    let center_label = if state.source_label.is_empty() {
+        "DROP".to_owned()
+    } else {
+        state.source_label.clone()
     };
     draw_text(
         cr,
@@ -531,7 +528,11 @@ fn draw(
             .get(index)
             .map(|target| {
                 if target.available {
-                    format!("Convert to {}", target.label)
+                    if state.hover_prefix.is_empty() {
+                        target.label.clone()
+                    } else {
+                        format!("{} {}", state.hover_prefix, target.label)
+                    }
                 } else {
                     target
                         .reason
@@ -539,8 +540,8 @@ fn draw(
                         .unwrap_or_else(|| "Not available".into())
                 }
             })
-            .unwrap_or_else(|| "Choose a format".into()),
-        _ => "Choose a format".into(),
+            .unwrap_or_else(|| idle_caption(state)),
+        _ => idle_caption(state),
     };
     draw_text(
         cr,
@@ -553,6 +554,14 @@ fn draw(
         0.9,
         false,
     );
+}
+
+fn idle_caption(state: &WheelState) -> String {
+    if state.caption.is_empty() {
+        "Choose a format".to_owned()
+    } else {
+        state.caption.clone()
+    }
 }
 
 fn draw_empty(

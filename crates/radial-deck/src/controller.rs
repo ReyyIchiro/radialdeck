@@ -1,16 +1,19 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use deck_core::tools::{self, ToolId, ToolOutcome, ToolRequest};
 use deck_core::{Category, Config, FolderError, Store, StoreError, Theme, Tools};
 use gtk::glib;
 use gtk::prelude::*;
 use uuid::Uuid;
 
-use crate::action_launcher::{ActionLauncher, ActionRequest, ActionView};
+use crate::action_launcher::{ActionLauncher, ActionRequest, ActionView, FormView, WheelMode};
 use crate::action_wheel::WheelTarget;
 use crate::actions;
 use crate::autostart;
+use crate::float_shelf::FloatShelf;
 use crate::hotkey::{self, HotkeyEvent, HotkeyService};
 use crate::launcher::Launcher;
 use crate::manage::ManageWindow;
@@ -29,6 +32,7 @@ pub struct Cli {
     pub reset: bool,
     pub version: bool,
     pub help: bool,
+    pub mode: Option<WheelMode>,
     pub files: Vec<PathBuf>,
 }
 
@@ -39,6 +43,9 @@ impl Cli {
             match arg.as_str() {
                 "--hidden" => cli.hidden = true,
                 "--show" => cli.show = true,
+                "--convert" | "--mode=convert" => cli.mode = Some(WheelMode::Convert),
+                "--tools" | "--mode=tools" => cli.mode = Some(WheelMode::Tools),
+                "--actions" | "--mode=actions" => cli.mode = Some(WheelMode::Actions),
                 "--projects" | "--folders" => cli.projects = true,
                 "--manage" => cli.manage = true,
                 "--settings" => cli.settings = true,
@@ -70,15 +77,19 @@ pub struct Controller {
     pub settings: RefCell<Option<SettingsWindow>>,
     pub action_launcher: RefCell<Option<ActionLauncher>>,
     action_sources: RefCell<Vec<PathBuf>>,
-    action_category: std::cell::Cell<Category>,
+    action_category: Cell<Category>,
+    action_mode: Cell<WheelMode>,
+    action_tool: RefCell<Option<ToolId>>,
     action_status: RefCell<Option<String>>,
+    airdrop_devices: RefCell<Vec<actions::KdeDevice>>,
+    float: RefCell<Option<Rc<FloatShelf>>>,
     tools: Tools,
-    converting: std::cell::Cell<bool>,
+    converting: Cell<bool>,
     hotkey: RefCell<Option<HotkeyService>>,
     tray: RefCell<Option<ksni::blocking::Handle<Tray>>>,
     hold_guard: RefCell<Option<gtk::gio::ApplicationHoldGuard>>,
     pub hotkey_state: RefCell<HotkeyState>,
-    cli_handled: std::cell::Cell<bool>,
+    cli_handled: Cell<bool>,
     startup_notice: RefCell<Option<String>>,
     fatal_error: RefCell<Option<String>>,
 }
@@ -138,15 +149,19 @@ impl Controller {
             settings: RefCell::new(None),
             action_launcher: RefCell::new(None),
             action_sources: RefCell::new(Vec::new()),
-            action_category: std::cell::Cell::new(Category::Images),
+            action_category: Cell::new(Category::Images),
+            action_mode: Cell::new(WheelMode::Convert),
+            action_tool: RefCell::new(None),
             action_status: RefCell::new(None),
+            airdrop_devices: RefCell::new(Vec::new()),
+            float: RefCell::new(None),
             tools: Tools::detect(),
-            converting: std::cell::Cell::new(false),
+            converting: Cell::new(false),
             hotkey: RefCell::new(None),
             tray: RefCell::new(None),
             hold_guard: RefCell::new(None),
             hotkey_state: RefCell::new(HotkeyState::default()),
-            cli_handled: std::cell::Cell::new(false),
+            cli_handled: Cell::new(false),
             startup_notice: RefCell::new(startup_notice),
             fatal_error: RefCell::new(fatal_error),
         })
@@ -223,6 +238,10 @@ impl Controller {
     }
 
     fn start_hotkey(self: &Rc<Self>) {
+        if std::env::var_os("RADIAL_DECK_NO_HOTKEY").is_some() {
+            tracing::info!("global shortcuts disabled by RADIAL_DECK_NO_HOTKEY");
+            return;
+        }
         let (tx, rx) = async_channel::unbounded();
         let (quick, projects) = {
             let config = self.config.borrow();
@@ -783,6 +802,7 @@ impl Controller {
     /// Applies one command line invocation. Called for the first launch and
     /// for later invocations forwarded to the running instance.
     pub fn handle_cli(self: &Rc<Self>, cli: Cli) {
+        tracing::debug!("handle cli: files={:?} mode={:?}", cli.files, cli.mode);
         self.cli_handled.set(true);
         if cli.manage {
             self.open_manage();
@@ -790,8 +810,8 @@ impl Controller {
             self.open_settings();
         } else if cli.projects {
             self.show_launcher();
-        } else if !cli.files.is_empty() {
-            self.show_actions(cli.files);
+        } else if !cli.files.is_empty() || cli.mode.is_some() {
+            self.show_actions_mode(cli.files, cli.mode.unwrap_or(WheelMode::Convert));
         } else if cli.show || !cli.hidden {
             self.show_actions(Vec::new());
         }
@@ -820,15 +840,30 @@ impl Controller {
     }
 
     pub fn show_actions(self: &Rc<Self>, files: Vec<PathBuf>) {
+        self.show_actions_mode(files, WheelMode::Convert);
+    }
+
+    pub fn show_actions_mode(self: &Rc<Self>, files: Vec<PathBuf>, mode: WheelMode) {
         self.hide_launcher();
+        tracing::debug!("show actions raw files={files:?}");
         let files = normalize_paths(files);
+        tracing::debug!("show actions normalized={files:?}");
         if let Some(category) = files.first().and_then(|file| category_for(file)) {
             self.action_category.set(category);
         }
         // An empty invocation (hotkey or tray) starts from a clean slate; only
         // an explicit drop or file-manager launch seeds sources.
         *self.action_sources.borrow_mut() = files;
+        tracing::debug!(
+            "show actions: mode={mode:?} sources={:?}",
+            self.action_sources.borrow()
+        );
+        self.action_mode.set(mode);
+        self.action_tool.replace(None);
         self.action_status.replace(None);
+        if mode == WheelMode::Actions {
+            *self.airdrop_devices.borrow_mut() = actions::kdeconnect_devices();
+        }
 
         let recreate = self
             .action_launcher
@@ -870,13 +905,14 @@ impl Controller {
         if visible {
             self.hide_actions();
         } else {
-            self.show_actions(Vec::new());
+            self.show_actions_mode(Vec::new(), self.action_mode.get());
         }
     }
 
     fn action_view(&self) -> ActionView {
         let sources = self.action_sources.borrow().clone();
         let category = self.action_category.get();
+        let mode = self.action_mode.get();
         let matching: Vec<&PathBuf> = sources
             .iter()
             .filter(|path| category_for(path) == Some(category))
@@ -885,27 +921,83 @@ impl Controller {
             .first()
             .map(|path| path.as_path())
             .or_else(|| sources.first().map(PathBuf::as_path));
-        let targets = deck_core::convert::registry::targets(category, source, &self.tools)
-            .into_iter()
-            .map(|target| WheelTarget {
-                available: target.is_available(),
-                id: target.id.clone(),
-                label: target.label.clone(),
-                reason: target.reason.clone(),
-            })
-            .collect();
 
-        // The hub shows the dropped source even when the selected tab does not
-        // match it, so switching tabs never looks like an empty drop.
-        let label_source = matching
-            .first()
-            .map(|path| path.as_path())
-            .or_else(|| sources.first().map(PathBuf::as_path));
-        let label_count = if matching.is_empty() {
+        let targets = match mode {
+            WheelMode::Convert => {
+                deck_core::convert::registry::targets(category, source, &self.tools)
+                    .into_iter()
+                    .map(|target| WheelTarget {
+                        available: target.is_available(),
+                        id: target.id.clone(),
+                        label: target.label.clone(),
+                        reason: target.reason.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            }
+            WheelMode::Tools => {
+                let matching_paths = matching
+                    .iter()
+                    .map(|path| (*path).clone())
+                    .collect::<Vec<_>>();
+                ToolId::available_for(category)
+                    .iter()
+                    .map(|id| {
+                        let reason = tools::availability(*id, category, &matching_paths);
+                        WheelTarget {
+                            available: reason.is_none(),
+                            id: id.id().to_owned(),
+                            label: id.short_label().to_owned(),
+                            reason,
+                        }
+                    })
+                    .collect()
+            }
+            WheelMode::Actions => {
+                let devices = self.airdrop_devices.borrow();
+                let airdrop_reason = if sources.is_empty() {
+                    Some("Drop files first".to_owned())
+                } else if devices.is_empty() {
+                    Some("No reachable KDE Connect device".to_owned())
+                } else {
+                    None
+                };
+                [
+                    ("copy", "Copy", "Copy files to the clipboard", None),
+                    ("move", "Move", "Move files to a folder", None),
+                    ("copy_path", "Copy Path", "Copy absolute paths", None),
+                    ("terminal", "Terminal", "Open a terminal at the files", None),
+                    ("airdrop", "Send", "Send with KDE Connect", airdrop_reason),
+                    ("float", "Float", "Keep files on a floating shelf", None),
+                ]
+                .into_iter()
+                .map(|(id, label, _description, reason)| {
+                    let reason = if sources.is_empty() {
+                        Some("Drop files first".to_owned())
+                    } else {
+                        reason
+                    };
+                    WheelTarget {
+                        available: reason.is_none(),
+                        id: id.to_owned(),
+                        label: label.to_owned(),
+                        reason,
+                    }
+                })
+                .collect::<Vec<_>>()
+            }
+        };
+
+        // Actions apply to every dropped file, including ones no converter
+        // recognises, so the hub counts the selection rather than matches.
+        let label_count = if mode == WheelMode::Actions || matching.is_empty() {
             sources.len()
         } else {
             matching.len()
         };
+        let label_source = matching
+            .first()
+            .map(|path| path.as_path())
+            .or_else(|| sources.first().map(PathBuf::as_path));
         let source_label = match (label_count, label_source) {
             (0, _) => String::new(),
             (1, Some(path)) => deck_core::convert::registry::extension(path)
@@ -914,23 +1006,68 @@ impl Controller {
             (count, _) => format!("{count} FILES"),
         };
 
+        let form = if mode == WheelMode::Tools {
+            self.action_tool.borrow().and_then(|id| {
+                let fields = tools::fields(id, category);
+                (!fields.is_empty()).then(|| FormView {
+                    tool: id,
+                    title: format!("{} · {}", id.label(), category.label()),
+                    fields,
+                })
+            })
+        } else {
+            None
+        };
+
+        let (title, empty_hint) = match mode {
+            WheelMode::Convert => (
+                category.heading().to_owned(),
+                if sources.is_empty() {
+                    "Drop files".into()
+                } else if matching.is_empty() {
+                    "Switch to a matching tab".into()
+                } else {
+                    "Choose a format".into()
+                },
+            ),
+            WheelMode::Tools => (
+                format!("{} tools", category.label()),
+                if sources.is_empty() {
+                    "Drop files".into()
+                } else if matching.is_empty() {
+                    "Switch to a matching tab".into()
+                } else if targets.is_empty() {
+                    "No quick tools here — use Convert".into()
+                } else {
+                    "Choose a tool".into()
+                },
+            ),
+            WheelMode::Actions => (
+                "File actions".into(),
+                if sources.is_empty() {
+                    "Drop files".into()
+                } else {
+                    "Choose an action".into()
+                },
+            ),
+        };
+
+        let status = self.action_status.borrow().clone().or_else(|| {
+            (mode != WheelMode::Actions && !sources.is_empty() && matching.is_empty())
+                .then(|| "These files do not match the selected category.".to_owned())
+        });
+
         ActionView {
             category,
-            title: category.heading().into(),
+            mode,
+            title,
             source_label,
             targets,
-            shortcut: self.display_shortcut(),
-            status: self.action_status.borrow().clone().or_else(|| {
-                (!sources.is_empty() && matching.is_empty())
-                    .then(|| "This tab has no formats for the dropped files.".to_owned())
-            }),
-            empty_hint: if sources.is_empty() {
-                "Drop files".into()
-            } else if matching.is_empty() {
-                "Switch to a matching tab".into()
-            } else {
-                "Choose a format".into()
-            },
+            shortcut: mode.key_label().to_owned(),
+            global_shortcut: format!("{} opens this wheel", self.display_shortcut()),
+            status,
+            empty_hint,
+            form,
         }
     }
 
@@ -944,7 +1081,17 @@ impl Controller {
         match request {
             ActionRequest::Category(category) => {
                 self.action_category.set(category);
+                self.action_tool.replace(None);
                 self.action_status.replace(None);
+                self.refresh_actions();
+            }
+            ActionRequest::Mode(mode) => {
+                self.action_mode.set(mode);
+                self.action_tool.replace(None);
+                self.action_status.replace(None);
+                if mode == WheelMode::Actions {
+                    *self.airdrop_devices.borrow_mut() = actions::kdeconnect_devices();
+                }
                 self.refresh_actions();
             }
             ActionRequest::Dropped(paths) => {
@@ -956,15 +1103,362 @@ impl Controller {
                     self.action_category.set(category);
                 }
                 *self.action_sources.borrow_mut() = files;
+                self.action_tool.replace(None);
                 self.action_status.replace(None);
                 self.refresh_actions();
             }
-            ActionRequest::Run(target) => self.run_conversion(&target),
+            ActionRequest::Run(target) => match self.action_mode.get() {
+                WheelMode::Convert => self.run_conversion(&target),
+                WheelMode::Tools => self.start_tool(&target),
+                WheelMode::Actions => self.run_file_action(&target),
+            },
+            ActionRequest::ToolRun { id, values } => {
+                self.action_tool.replace(None);
+                self.execute_tool(id, values);
+            }
+            ActionRequest::ToolCancel => {
+                self.action_tool.replace(None);
+                self.refresh_actions();
+            }
             ActionRequest::Unavailable(reason) => {
                 self.action_status.replace(Some(reason));
                 self.refresh_actions();
             }
             ActionRequest::Dismiss => self.hide_actions(),
+        }
+    }
+
+    fn matching_sources(&self, category: Category) -> Vec<PathBuf> {
+        self.action_sources
+            .borrow()
+            .iter()
+            .filter(|path| category_for(path) == Some(category))
+            .cloned()
+            .collect()
+    }
+
+    fn start_tool(self: &Rc<Self>, id: &str) {
+        let Some(id) = ToolId::from_id(id) else {
+            return;
+        };
+        let category = self.action_category.get();
+        let sources = self.matching_sources(category);
+        if let Some(reason) = tools::availability(id, category, &sources) {
+            self.action_status.replace(Some(reason));
+            self.refresh_actions();
+            return;
+        }
+        if tools::fields(id, category).is_empty() {
+            self.execute_tool(id, BTreeMap::new());
+        } else {
+            self.action_tool.replace(Some(id));
+            self.action_status.replace(None);
+            self.refresh_actions();
+        }
+    }
+
+    fn execute_tool(self: &Rc<Self>, id: ToolId, values: BTreeMap<String, String>) {
+        if self.converting.get() {
+            self.action_status
+                .replace(Some("Another operation is already running".into()));
+            self.refresh_actions();
+            return;
+        }
+        let category = self.action_category.get();
+        let sources = self.matching_sources(category);
+        if let Some(reason) = tools::availability(id, category, &sources) {
+            self.action_status.replace(Some(reason));
+            self.refresh_actions();
+            return;
+        }
+        self.converting.set(true);
+        self.hide_actions();
+        tracing::info!("tool {} on {} file(s)", id.id(), sources.len());
+
+        let request = ToolRequest {
+            id: Some(id),
+            sources,
+            values,
+        };
+        let (sender, receiver) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let outcome = tools::execute(&request);
+            let _ = sender.send_blocking(outcome);
+        });
+        let controller = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let outcome = receiver.recv().await;
+            if let Some(controller) = controller.upgrade() {
+                controller.converting.set(false);
+                match outcome {
+                    Ok(outcome) => controller.report_tool(id, &outcome),
+                    Err(_) => controller.notify(
+                        "Tool failed",
+                        "The tool worker stopped unexpectedly. Check the log.",
+                    ),
+                }
+            }
+        });
+    }
+
+    fn report_tool(&self, id: ToolId, outcome: &ToolOutcome) {
+        let created = outcome.created.len();
+        let failed = outcome.failures.len();
+        tracing::info!(
+            "tool {} finished: {created} created, {failed} failed",
+            id.id()
+        );
+        if failed == 0 && created > 0 {
+            self.notify(
+                id.label(),
+                &format!(
+                    "{} file{} created next to the original{}.",
+                    created,
+                    if created == 1 { "" } else { "s" },
+                    if created == 1 { "" } else { "s" }
+                ),
+            );
+            return;
+        }
+        if let Some(failure) = outcome.failures.first() {
+            let name = failure
+                .source
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| failure.source.display().to_string());
+            self.notify(id.label(), &format!("{name}: {}", failure.message));
+        } else if let Some(message) = &outcome.message {
+            self.notify(id.label(), message);
+        } else {
+            self.notify(id.label(), "No files were produced.");
+        }
+    }
+
+    fn run_file_action(self: &Rc<Self>, action: &str) {
+        let sources = self.action_sources.borrow().clone();
+        if sources.is_empty() {
+            return;
+        }
+        match action {
+            "copy" => {
+                self.hide_actions();
+                match actions::copy_files_to_clipboard(&sources) {
+                    Ok(()) => self.notify(
+                        "Copied",
+                        &format!(
+                            "{} file{} on the clipboard.",
+                            sources.len(),
+                            if sources.len() == 1 { "" } else { "s" }
+                        ),
+                    ),
+                    Err(error) => self.notify("Could not copy files", &error),
+                }
+            }
+            "copy_path" => {
+                self.hide_actions();
+                actions::copy_paths_to_clipboard(&sources);
+                self.notify(
+                    "Paths copied",
+                    &format!(
+                        "{} path{} on the clipboard.",
+                        sources.len(),
+                        if sources.len() == 1 { "" } else { "s" }
+                    ),
+                );
+            }
+            "terminal" => {
+                let directory = deck_core::file_actions::common_parent(&sources)
+                    .or_else(|| std::env::current_dir().ok());
+                let Some(directory) = directory else {
+                    self.notify("Terminal unavailable", "No folder could be resolved.");
+                    return;
+                };
+                self.hide_actions();
+                let terminal = self.config.borrow().preferences.terminal.clone();
+                if let Err(error) = actions::open_terminal(&directory, terminal.as_deref()) {
+                    self.notify("Could not open terminal", &error.to_string());
+                }
+            }
+            "move" => self.choose_move_destination(&sources),
+            "airdrop" => self.choose_airdrop_device(&sources),
+            "float" => {
+                self.hide_actions();
+                self.show_float(&sources);
+            }
+            _ => {}
+        }
+    }
+
+    fn choose_move_destination(self: &Rc<Self>, sources: &[PathBuf]) {
+        let Some(window) = self
+            .action_launcher
+            .borrow()
+            .as_ref()
+            .map(ActionLauncher::window)
+            .cloned()
+        else {
+            return;
+        };
+        self.hide_actions();
+        let start = deck_core::file_actions::common_parent(sources)
+            .or_else(home_dir)
+            .map(gtk::gio::File::for_path);
+        let dialog = gtk::FileDialog::builder()
+            .title("Move to folder")
+            .modal(true)
+            .build();
+        if let Some(start) = start {
+            dialog.set_initial_folder(Some(&start));
+        }
+        let controller = Rc::downgrade(self);
+        let sources = sources.to_vec();
+        dialog.select_folder(
+            Some(&window),
+            None::<&gtk::gio::Cancellable>,
+            move |result| {
+                let Some(controller) = controller.upgrade() else {
+                    return;
+                };
+                let Ok(folder) = result else {
+                    return;
+                };
+                let Some(destination) = folder.path() else {
+                    controller.notify("Move failed", "The selected folder is not local.");
+                    return;
+                };
+                controller.move_async(&sources, destination);
+            },
+        );
+    }
+
+    fn move_async(self: &Rc<Self>, sources: &[PathBuf], destination: PathBuf) {
+        if self.converting.get() {
+            self.notify("Busy", "Another operation is already running.");
+            return;
+        }
+        self.converting.set(true);
+        let sources = sources.to_vec();
+        let (sender, receiver) = async_channel::bounded(1);
+        let worker_destination = destination.clone();
+        std::thread::spawn(move || {
+            let outcome = deck_core::file_actions::move_files(&sources, &worker_destination);
+            let _ = sender.send_blocking(outcome);
+        });
+        let controller = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let outcome = receiver.recv().await;
+            if let Some(controller) = controller.upgrade() {
+                controller.converting.set(false);
+                match outcome {
+                    Ok(Ok(moved)) => controller.notify(
+                        "Moved",
+                        &format!(
+                            "{} file{} moved to {}.",
+                            moved.len(),
+                            if moved.len() == 1 { "" } else { "s" },
+                            destination.display()
+                        ),
+                    ),
+                    Ok(Err(error)) => controller.notify("Could not move files", &error.to_string()),
+                    Err(_) => controller.notify("Could not move files", "The worker stopped."),
+                }
+            }
+        });
+    }
+
+    fn choose_airdrop_device(self: &Rc<Self>, sources: &[PathBuf]) {
+        let devices = self.airdrop_devices.borrow().clone();
+        if devices.is_empty() {
+            self.notify(
+                "KDE Connect",
+                "No reachable device. Pair one in KDE Connect first.",
+            );
+            return;
+        }
+        let Some(window) = self
+            .action_launcher
+            .borrow()
+            .as_ref()
+            .map(ActionLauncher::window)
+            .cloned()
+        else {
+            return;
+        };
+        self.hide_actions();
+        let mut buttons = devices
+            .iter()
+            .map(|device| format!("Send to {}", device.name))
+            .collect::<Vec<_>>();
+        buttons.push("Cancel".into());
+        let labels = buttons.iter().map(String::as_str).collect::<Vec<_>>();
+        let dialog = gtk::AlertDialog::builder()
+            .modal(true)
+            .message("Send with KDE Connect")
+            .detail(format!(
+                "{} file{}",
+                sources.len(),
+                if sources.len() == 1 { "" } else { "s" }
+            ))
+            .buttons(labels)
+            .build();
+        let controller = Rc::downgrade(self);
+        let sources = sources.to_vec();
+        dialog.choose(
+            Some(&window),
+            None::<&gtk::gio::Cancellable>,
+            move |result| {
+                let Ok(index) = result else {
+                    return;
+                };
+                let Some(device) = devices.get(index as usize).cloned() else {
+                    return;
+                };
+                let Some(controller) = controller.upgrade() else {
+                    return;
+                };
+                controller.share_async(sources, device);
+            },
+        );
+    }
+
+    fn share_async(self: &Rc<Self>, sources: Vec<PathBuf>, device: actions::KdeDevice) {
+        let (sender, receiver) = async_channel::bounded(1);
+        let id = device.id.clone();
+        std::thread::spawn(move || {
+            let outcome = actions::share_via_kdeconnect(&sources, &id);
+            let _ = sender.send_blocking(outcome);
+        });
+        let controller = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let outcome = receiver.recv().await;
+            if let Some(controller) = controller.upgrade() {
+                match outcome {
+                    Ok(Ok(())) => {
+                        controller.notify("Sent", &format!("Files sent to {}.", device.name))
+                    }
+                    Ok(Err(error)) => controller.notify("KDE Connect failed", &error),
+                    Err(_) => controller.notify("KDE Connect failed", "The worker stopped."),
+                }
+            }
+        });
+    }
+
+    fn show_float(self: &Rc<Self>, sources: &[PathBuf]) {
+        let recreate = self
+            .float
+            .borrow()
+            .as_ref()
+            .is_none_or(|shelf| shelf.is_destroyed());
+        if recreate {
+            *self.float.borrow_mut() = None;
+            let Some(app) = self.app.borrow().clone() else {
+                return;
+            };
+            *self.float.borrow_mut() = Some(FloatShelf::new(&app));
+        }
+        if let Some(shelf) = self.float.borrow().as_ref() {
+            shelf.add(sources.iter().cloned());
+            shelf.present();
         }
     }
 
@@ -1113,6 +1607,10 @@ fn normalize_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
             }
         })
         .collect()
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 fn next_color(controller: &Controller) -> String {
