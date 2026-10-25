@@ -15,3 +15,6 @@ packaging/flatpak/cargo-sources.json
 .idea/
 .vscode/
 *.swp
+
+# Local agent tooling state
+.omp/
