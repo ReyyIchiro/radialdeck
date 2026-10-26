@@ -52,6 +52,9 @@ impl WheelMode {
 pub enum ActionRequest {
     Category(Category),
     Mode(WheelMode),
+    /// A modifier-key switch (Shift/Ctrl/Super) while the wheel is open.
+    /// The controller honours the live-modifier preference before acting.
+    LiveMode(WheelMode),
     Run(String),
     Unavailable(String),
     Dismiss,
@@ -326,7 +329,7 @@ impl ActionLauncher {
                     _ => None,
                 };
                 if let Some(mode) = mode {
-                    handler(ActionRequest::Mode(mode));
+                    handler(ActionRequest::LiveMode(mode));
                     glib::Propagation::Stop
                 } else if keyval == gdk::Key::Escape {
                     handler(ActionRequest::Dismiss);

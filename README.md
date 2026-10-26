@@ -339,6 +339,11 @@ tanpa menggantung pipe pemanggilnya.
 
 - Wayland tidak mengekspos posisi kursor global, jadi roda membuka di tengah monitor yang
   berisi pointer (bukan di titik kursor). X11 fallback mengisi monitor tersebut.
+- Gestur Tangerine (drag + tekan modifier, roda muncul dan tetap sampai drop) tidak dapat
+  ditiru penuh: Wayland melarang aplikasi biasa melihat status drag lintas-aplikasi atau
+  posisi pointer global. Sebagai gantinya, **live-modifier switching** dipakai — roda dibuka
+  dulu (hotkey atau menu layanan), lalu `Shift` / `Super` / `Ctrl` mengganti mode dengan cepat.
+  Lihat baris "Live-modifier switching" di Settings.
 - Shortcut dipegang portal sehingga butuh persetujuan KDE satu kali saat pertama kali
   binding project ditambahkan.
 - Konversi dan tools memerlukan tool eksternal; Flatpak sandbox belum dapat memakai binary

@@ -57,6 +57,7 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 | 26 file tool via `examples/tool_smoke` | 24 sukses; 2 penolakan input benar (`extract_archive` pada `.md`) |
 | `join_videos` dua klip | `joined.mp4` setelah path concat dibuat absolut |
 | Form Compress (kualitas 60) dari UI | `photo-compressed.png` 96×64 tertulis |
+| Live-modifier switching (Shift/Super/Ctrl) | mode berganti instan, sumber file ter-seed dipertahankan; dapat dimatikan di Settings |
 | Mode Actions: Copy Path | clipboard berisi path absolut |
 | `scripts/ui-smoke.sh` (KWin virtual, layar nyata tidak tersentuh) | 15/15: overlay Wayland ter-map & tergambar, form Compress menulis file, Float shelf 340×420, `Esc` menutup |
 | `ui-smoke.sh` isolasi bus | bus D-Bus privat; 0 proses tersisa, keluar 25 detik tanpa menggantung pipe |

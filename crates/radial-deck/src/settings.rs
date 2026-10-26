@@ -16,6 +16,7 @@ pub struct SettingsWindow {
     quick_error: gtk::Label,
     projects_error: gtk::Label,
     close_switch: gtk::Switch,
+    live_modifier_switch: gtk::Switch,
     autostart_switch: gtk::Switch,
     terminal: gtk::DropDown,
     terminal_options: Rc<RefCell<Vec<String>>>,
@@ -87,6 +88,15 @@ impl SettingsWindow {
             &close_switch,
         );
 
+        let live_modifier_switch = gtk::Switch::new();
+        live_modifier_switch.set_halign(gtk::Align::End);
+        live_modifier_switch.set_valign(gtk::Align::Center);
+        let live_row = setting_row(
+            "Live-modifier switching",
+            "While the wheel is open, Shift/Ctrl/Super switch Convert/Tools/Actions instantly.",
+            &live_modifier_switch,
+        );
+
         let autostart_switch = gtk::Switch::new();
         autostart_switch.set_halign(gtk::Align::End);
         autostart_switch.set_valign(gtk::Align::Center);
@@ -151,6 +161,7 @@ impl SettingsWindow {
         content.set_width_request(560);
         content.append(&card(shortcut_box));
         content.append(&card(manage_row));
+        content.append(&card(live_row));
         content.append(&card(close_row));
         content.append(&card(autostart_row));
         content.append(&card(terminal_row));
@@ -182,6 +193,7 @@ impl SettingsWindow {
             quick_error,
             projects_error,
             close_switch,
+            live_modifier_switch,
             autostart_switch,
             terminal,
             terminal_options: Rc::new(RefCell::new(Vec::new())),
@@ -251,6 +263,19 @@ impl SettingsWindow {
         {
             let controller = self.controller.clone();
             let suppress = Rc::clone(&self.suppress);
+            self.live_modifier_switch
+                .connect_active_notify(move |witch| {
+                    if suppress.get() {
+                        return;
+                    }
+                    if let Some(controller) = controller.upgrade() {
+                        controller.set_live_modifier(witch.is_active());
+                    }
+                });
+        }
+        {
+            let controller = self.controller.clone();
+            let suppress = Rc::clone(&self.suppress);
             self.autostart_switch.connect_active_notify(move |switch| {
                 if suppress.get() {
                     return;
@@ -316,10 +341,11 @@ impl SettingsWindow {
         let Some(controller) = self.controller.upgrade() else {
             return;
         };
-        let (close_after, autostart, preferred_terminal, theme_pref) = {
+        let (close_after, live_modifier, autostart, preferred_terminal, theme_pref) = {
             let config = controller.config();
             (
                 config.preferences.close_after_launch,
+                config.preferences.live_modifier,
                 config.preferences.launch_at_login,
                 config.preferences.terminal.clone(),
                 config.preferences.theme,
@@ -345,6 +371,7 @@ impl SettingsWindow {
         );
 
         self.close_switch.set_active(close_after);
+        self.live_modifier_switch.set_active(live_modifier);
         self.autostart_switch.set_active(autostart);
 
         let mut options = vec!["Auto-detect".to_string()];

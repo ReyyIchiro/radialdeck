@@ -90,6 +90,9 @@ alasan agar pengguna tahu dependensi yang perlu dipasang. Semua proses memakai
 `Command` + argv tanpa shell. Konversi dijalankan di luar main thread dan hasilnya
 dilaporkan lewat notifikasi desktop.
 
-**Batas lingkup:** roda aksi file Tangerine (AirDrop, Float, Copy/Move, Terminal, crop,
-trim, merge) tidak disalin; hanya konversi format dan kompresi/ekstraksi arsip yang
-diimplementasikan pada tahap ini.
+**Batas lingkup:** roda aksi file Tangerine (AirDrop, Float, Copy/Move, Terminal) sudah
+diimplementasikan penuh. Gestur *drag + modifier* tidak bisa ditiru karena Wayland
+menyembunyikan status drag dan posisi pointer global dari aplikasi biasa; sebagai gantinya
+dipakai live-modifier switching: buka roda dulu (hotkey/menu layanan), lalu `Shift` /
+`Super` / `Ctrl` mengganti mode secara instan sambil mempertahankan sumber file ter-seed.
+Keputusan ini diambil bersama user lewat dialog pada 2026-10-25.

@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::folder::{normalize_color, Availability, Folder, FolderError, Project};
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Persisted application state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -328,6 +328,10 @@ pub struct Preferences {
     pub projects_hotkey: String,
     #[serde(default = "default_true")]
     pub close_after_launch: bool,
+    /// While the wheel is open and focused, Shift/Ctrl/Meta switch between
+    /// the Convert, Tools and Actions wheels (Tangerine-style gestures).
+    #[serde(default = "default_true")]
+    pub live_modifier: bool,
     #[serde(default)]
     pub launch_at_login: bool,
     /// Terminal executable; `None` means auto-detect.
@@ -343,6 +347,7 @@ impl Default for Preferences {
             hotkey: default_hotkey(),
             projects_hotkey: default_projects_hotkey(),
             close_after_launch: true,
+            live_modifier: true,
             launch_at_login: false,
             terminal: None,
             theme: Theme::System,

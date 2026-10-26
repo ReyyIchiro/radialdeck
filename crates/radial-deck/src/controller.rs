@@ -664,6 +664,11 @@ impl Controller {
         self.save();
     }
 
+    pub fn set_live_modifier(&self, enabled: bool) {
+        self.config.borrow_mut().preferences.live_modifier = enabled;
+        self.save();
+    }
+
     pub fn set_theme(&self, theme_value: Theme) {
         self.config.borrow_mut().preferences.theme = theme_value;
         theme::apply_theme(theme_value);
@@ -1071,6 +1076,16 @@ impl Controller {
         }
     }
 
+    fn apply_action_mode(&self, mode: WheelMode) {
+        self.action_mode.set(mode);
+        self.action_tool.replace(None);
+        self.action_status.replace(None);
+        if mode == WheelMode::Actions {
+            *self.airdrop_devices.borrow_mut() = actions::kdeconnect_devices();
+        }
+        self.refresh_actions();
+    }
+
     fn refresh_actions(&self) {
         if let Some(launcher) = self.action_launcher.borrow().as_ref() {
             launcher.render(self.action_view());
@@ -1086,13 +1101,18 @@ impl Controller {
                 self.refresh_actions();
             }
             ActionRequest::Mode(mode) => {
-                self.action_mode.set(mode);
-                self.action_tool.replace(None);
-                self.action_status.replace(None);
-                if mode == WheelMode::Actions {
-                    *self.airdrop_devices.borrow_mut() = actions::kdeconnect_devices();
+                self.apply_action_mode(mode);
+            }
+            ActionRequest::LiveMode(mode) => {
+                if !self.config.borrow().preferences.live_modifier {
+                    return;
                 }
-                self.refresh_actions();
+                // A modifier key is a momentary gesture: switching modes must
+                // keep the seeded sources, never reset them to an empty slate.
+                let sources = self.action_sources.borrow().clone();
+                tracing::info!("live-modifier switch to {mode:?}");
+                self.apply_action_mode(mode);
+                *self.action_sources.borrow_mut() = sources;
             }
             ActionRequest::Dropped(paths) => {
                 let files = normalize_paths(paths);
