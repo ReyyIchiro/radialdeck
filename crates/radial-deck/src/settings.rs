@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use deck_core::Theme;
+use deck_core::{PackageManager, Theme};
 use gtk::pango;
 use gtk::prelude::*;
 
@@ -23,6 +23,8 @@ pub struct SettingsWindow {
     theme: gtk::DropDown,
     config_path: gtk::Label,
     log_path: gtk::Label,
+    dependencies: gtk::Box,
+    dependency_summary: gtk::Label,
     controller: Weak<Controller>,
     suppress: Rc<Cell<bool>>,
 }
@@ -124,6 +126,19 @@ impl SettingsWindow {
             &theme_dropdown,
         );
 
+        let dependencies = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        let dependency_summary = setting_subtitle("Checking installed programs…");
+        let dependency_card = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        dependency_card.append(&setting_title("Dependencies"));
+        dependency_card.append(&setting_subtitle(
+            "RadialDeck shells out to programs already on your system. A missing program only disables the tools that need it.",
+        ));
+        dependency_card.append(&dependency_summary);
+        dependency_card.append(&dependencies);
+        let recheck = gtk::Button::with_label("Recheck");
+        recheck.set_halign(gtk::Align::End);
+        dependency_card.append(&recheck);
+
         let config_path = gtk::Label::new(None);
         config_path.add_css_class("rd-subtle");
         config_path.set_halign(gtk::Align::Start);
@@ -166,6 +181,7 @@ impl SettingsWindow {
         content.append(&card(autostart_row));
         content.append(&card(terminal_row));
         content.append(&card(theme_row));
+        content.append(&card(dependency_card));
         content.append(&card(config_row));
         content.append(&card(log_row));
 
@@ -200,11 +216,13 @@ impl SettingsWindow {
             theme: theme_dropdown,
             config_path,
             log_path,
+            dependencies,
+            dependency_summary,
             controller: controller.clone(),
             suppress: Rc::new(Cell::new(false)),
         };
 
-        settings.connect_signals(&change, &manage_button, &open_folder, &open_logs);
+        settings.connect_signals(&change, &manage_button, &open_folder, &open_logs, &recheck);
         settings.refresh();
         settings
     }
@@ -215,7 +233,16 @@ impl SettingsWindow {
         manage: &gtk::Button,
         open_folder: &gtk::Button,
         open_logs: &gtk::Button,
+        recheck: &gtk::Button,
     ) {
+        {
+            let dependencies = self.dependencies.clone();
+            let summary = self.dependency_summary.clone();
+            let window = self.window.clone();
+            recheck.connect_clicked(move |_| {
+                populate_dependencies(&dependencies, &summary, &window);
+            });
+        }
         {
             let controller = self.controller.clone();
             change.connect_clicked(move |_| {
@@ -411,9 +438,80 @@ impl SettingsWindow {
             self.log_path.set_text("Unavailable");
         }
 
+        populate_dependencies(&self.dependencies, &self.dependency_summary, &self.window);
         theme::apply_theme(theme_pref);
         self.suppress.set(false);
     }
+}
+
+/// Rebuilds the dependency rows. Detection is cheap (a few `PATH` lookups),
+/// but it only runs when the window is refreshed or the user asks for it.
+fn populate_dependencies(rows: &gtk::Box, summary: &gtk::Label, window: &gtk::ApplicationWindow) {
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+
+    let statuses = deck_core::dependencies::statuses();
+    let missing = deck_core::dependencies::missing(&statuses);
+    if missing.is_empty() {
+        summary.set_text("Every optional program is installed.");
+    } else {
+        summary.set_text(&format!(
+            "{} of {} programs are missing; affected tools are disabled.",
+            missing.len(),
+            statuses.len()
+        ));
+    }
+
+    for status in &statuses {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        labels.set_hexpand(true);
+        labels.append(&setting_title(status.dependency.label));
+        labels.append(&setting_subtitle(status.dependency.purpose));
+        row.append(&labels);
+        let badge = gtk::Label::new(Some(if status.available {
+            "Installed"
+        } else {
+            "Missing"
+        }));
+        badge.add_css_class(if status.available {
+            "rd-badge"
+        } else {
+            "rd-badge-missing"
+        });
+        row.append(&badge);
+        rows.append(&row);
+    }
+
+    if let Some(command) = PackageManager::detect().install_command(&missing) {
+        let install = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let entry = gtk::Entry::new();
+        entry.set_text(&command);
+        entry.set_editable(false);
+        entry.set_hexpand(true);
+        entry.add_css_class("rd-mono");
+        let copy = gtk::Button::with_label("Copy");
+        let window = window.clone();
+        let text = command.clone();
+        copy.connect_clicked(move |_| {
+            window.clipboard().set_text(&text);
+        });
+        install.append(&entry);
+        install.append(&copy);
+        rows.append(&install);
+        rows.append(&setting_subtitle(
+            "Run this in a terminal, then press Recheck. RadialDeck never installs packages itself.",
+        ));
+    }
+
+    let hint = gtk::Label::new(Some(
+        "Optional: Ghostscript for PDF compression, 7-Zip for extra archive formats, KDE Connect for sending files.",
+    ));
+    hint.add_css_class("rd-subtle");
+    hint.set_wrap(true);
+    hint.set_halign(gtk::Align::Start);
+    rows.append(&hint);
 }
 
 fn shortcut_line(title: &str, subtitle: &str, badge: &gtk::Label) -> gtk::Box {

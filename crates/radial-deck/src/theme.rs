@@ -41,9 +41,13 @@ window.rd-dialog {
     color: #e5484d;
     font-size: 12px;
 }
-.rd-badge-error {
+.rd-badge-error,
+.rd-badge-missing {
     color: #e5484d;
     background: alpha(#e5484d, 0.14);
+}
+.rd-mono {
+    font-family: monospace;
 }
 .rd-card {
     border-radius: 10px;
