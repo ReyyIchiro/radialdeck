@@ -260,7 +260,9 @@ mod tests {
             .install_command(&["poppler", "7zip"])
             .unwrap();
         assert_eq!(command, "sudo apt install poppler-utils 7zip");
-        assert!(PackageManager::Unknown.install_command(&["ffmpeg"]).is_none());
+        assert!(PackageManager::Unknown
+            .install_command(&["ffmpeg"])
+            .is_none());
         assert!(PackageManager::Pacman.install_command(&[]).is_none());
     }
 

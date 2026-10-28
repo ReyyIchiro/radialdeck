@@ -66,6 +66,22 @@ impl Category {
         }
     }
 
+    /// Stable key used in config files; never rename these.
+    pub fn id(self) -> &'static str {
+        match self {
+            Category::Images => "images",
+            Category::Video => "video",
+            Category::Audio => "audio",
+            Category::Pdf => "pdf",
+            Category::Documents => "documents",
+            Category::Slides => "slides",
+            Category::Spreadsheets => "spreadsheets",
+            Category::Epub => "epub",
+            Category::Subtitles => "subtitles",
+            Category::Archives => "archives",
+        }
+    }
+
     pub fn heading(self) -> &'static str {
         match self {
             Category::Images => "Image conversions",

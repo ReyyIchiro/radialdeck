@@ -11,30 +11,7 @@ use super::registry::find_tool;
 use super::ConvertError;
 
 fn run(command: &mut Command, label: &str) -> Result<(), ConvertError> {
-    let output = command
-        .output()
-        .map_err(|error| ConvertError(format!("run {label}: {error}")))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let tail: Vec<&str> = stderr
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .rev()
-        .take(3)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    Err(ConvertError(format!(
-        "{label} failed: {}",
-        if tail.is_empty() {
-            format!("exit status {}", output.status)
-        } else {
-            tail.join(" ")
-        }
-    )))
+    crate::tools::run_command(command, label).map_err(ConvertError)
 }
 
 fn magick_bin() -> Result<PathBuf, ConvertError> {
@@ -55,10 +32,7 @@ fn source_stem(source: &Path) -> String {
 }
 
 fn source_parent(source: &Path) -> PathBuf {
-    source
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::job::destination_dir(source)
 }
 
 fn move_into(source: &Path, destination: &Path) -> Result<(), ConvertError> {

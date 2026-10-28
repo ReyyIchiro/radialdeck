@@ -47,9 +47,38 @@ impl Outcome {
 ///
 /// Files that cannot be converted are reported individually; one failure never
 /// aborts the rest of the batch.
+/// Converts with an explicit output location and cancellation token.
+pub fn convert_with(
+    sources: &[PathBuf],
+    category: Category,
+    target: &str,
+    tools: &Tools,
+    output: crate::OutputLocation,
+    cancel: crate::CancelToken,
+    reporter: crate::job::Reporter,
+) -> Outcome {
+    crate::job::scope(output, Some(cancel), || {
+        crate::job::set_reporter(reporter);
+        let mut outcome = convert(sources, category, target, tools);
+        if crate::job::cancelled() {
+            crate::job::cleanup_registered();
+            outcome.created.clear();
+        }
+        outcome
+    })
+}
+
 pub fn convert(sources: &[PathBuf], category: Category, target: &str, _tools: &Tools) -> Outcome {
     let mut outcome = Outcome::default();
+    crate::job::set_total(sources.len());
     for source in sources {
+        if crate::job::cancelled() {
+            outcome.failures.push(Failure {
+                source: source.clone(),
+                message: "Cancelled".into(),
+            });
+            break;
+        }
         if !source.exists() {
             outcome.push(
                 Err(ConvertError(format!(
@@ -62,6 +91,7 @@ pub fn convert(sources: &[PathBuf], category: Category, target: &str, _tools: &T
         }
         let result = convert_one(source, category, target);
         outcome.push(result, source);
+        crate::job::report_file(source);
     }
     outcome
 }
@@ -97,7 +127,7 @@ fn convert_one(
         Category::Subtitles => match target {
             "txt" => {
                 let destination = output::unique_path(
-                    source.parent().unwrap_or_else(|| Path::new(".")),
+                    &crate::job::destination_dir(source),
                     &source
                         .file_stem()
                         .map(|stem| stem.to_string_lossy().into_owned())
@@ -156,6 +186,56 @@ mod tests {
         let outcome = convert(&sources, Category::Images, "webp", &tools);
         assert!(outcome.created.is_empty());
         assert_eq!(outcome.failures.len(), 1);
+    }
+
+    #[test]
+    fn conversion_honours_the_scope_output_location() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("one.png");
+        ::image::RgbImage::from_pixel(4, 4, ::image::Rgb([1, 2, 3]))
+            .save(&source)
+            .unwrap();
+        let target = dir.path().join("converted");
+        let tools = Tools::default();
+        let outcome = crate::job::scope(
+            crate::OutputLocation::Subfolder("converted".into()),
+            None,
+            || {
+                convert(
+                    std::slice::from_ref(&source),
+                    Category::Images,
+                    "webp",
+                    &tools,
+                )
+            },
+        );
+        assert_eq!(outcome.created.len(), 1);
+        assert_eq!(outcome.created[0].parent().unwrap(), target);
+        assert!(target.join("one.webp").exists());
+    }
+
+    #[test]
+    fn cancelled_conversion_stops_before_the_next_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sources = Vec::new();
+        for name in ["one", "two"] {
+            let path = dir.path().join(format!("{name}.png"));
+            ::image::RgbImage::from_pixel(4, 4, ::image::Rgb([9, 9, 9]))
+                .save(&path)
+                .unwrap();
+            sources.push(path);
+        }
+        let tools = Tools::default();
+        let cancel = crate::CancelToken::new();
+        cancel.cancel();
+        let outcome = crate::job::scope(crate::OutputLocation::Alongside, Some(cancel), || {
+            convert(&sources, Category::Images, "webp", &tools)
+        });
+        assert!(outcome.created.is_empty());
+        assert!(outcome
+            .failures
+            .iter()
+            .any(|failure| failure.message.contains("Cancelled")));
     }
 
     #[test]

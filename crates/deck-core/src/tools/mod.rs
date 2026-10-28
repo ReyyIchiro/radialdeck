@@ -21,6 +21,12 @@ use shell::{parse_seconds, parse_u32, ToolResult};
 
 pub use shell::ToolResult as ToolExecutionResult;
 
+/// Shared by the conversion engine so both halves honour cancellation and
+/// stream child-process output identically.
+pub(crate) fn run_command(command: &mut std::process::Command, label: &str) -> ToolResult<()> {
+    shell::run(command, label)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolId {
@@ -192,6 +198,25 @@ impl ToolId {
     /// reference app's advanced wheel.
     pub fn available_for(category: Category) -> &'static [ToolId] {
         category_tools(category)
+    }
+
+    /// Category order after applying a user's saved id list. Unknown ids are
+    /// dropped and hidden tools omitted. `None` means the user never edited
+    /// this category, so the defaults apply; `Some(empty)` deliberately hides
+    /// every tool.
+    pub fn custom_order(category: Category, saved: Option<&[String]>) -> Vec<ToolId> {
+        let Some(saved) = saved else {
+            return category_tools(category).to_vec();
+        };
+        let mut ordered: Vec<ToolId> = Vec::new();
+        for id in saved {
+            if let Some(tool) = ToolId::from_id(id) {
+                if tool.for_category(category) && !ordered.contains(&tool) {
+                    ordered.push(tool);
+                }
+            }
+        }
+        ordered
     }
 
     pub fn requirements(self) -> &'static [&'static str] {
@@ -548,6 +573,29 @@ impl ToolOutcome {
 
 /// Executes a tool. The caller is expected to have checked `availability` and
 /// rendered the fields; this function validates parameters again.
+/// Runs a request with an explicit output location and cancellation token.
+/// Used by the UI, which owns the preferences and the Cancel button. The
+/// thread-local scope also carries progress to the reporter set below.
+pub fn execute_with(
+    request: &ToolRequest,
+    output: crate::OutputLocation,
+    cancel: crate::CancelToken,
+    reporter: crate::job::Reporter,
+) -> ToolOutcome {
+    crate::job::scope(output, Some(cancel), || {
+        crate::job::set_reporter(reporter);
+        let mut outcome = execute(request);
+        if crate::job::cancelled() {
+            crate::job::cleanup_registered();
+            outcome.created.clear();
+            if outcome.message.is_none() {
+                outcome.message = Some("Cancelled".into());
+            }
+        }
+        outcome
+    })
+}
+
 pub fn execute(request: &ToolRequest) -> ToolOutcome {
     let Some(id) = request.id else {
         return ToolOutcome::failure(std::path::Path::new(""), "No tool was selected".to_owned());
@@ -622,5 +670,42 @@ fn seconds(values: &BTreeMap<String, String>, key: &str, fallback: f64) -> ToolR
         Ok(fallback)
     } else {
         parse_seconds(raw)
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    #[test]
+    fn saved_order_is_respected_and_unknown_ids_are_dropped() {
+        let saved = vec![
+            "compress".to_string(),
+            "nonsense".to_string(),
+            "create_pdf".to_string(),
+            "compress".to_string(),
+        ];
+        let ordered = ToolId::custom_order(Category::Images, Some(&saved));
+        assert_eq!(ordered, vec![ToolId::Compress, ToolId::CreatePdf]);
+    }
+
+    #[test]
+    fn tools_from_another_category_are_filtered_out() {
+        let saved = vec!["join_videos".to_string(), "crop_image".to_string()];
+        let ordered = ToolId::custom_order(Category::Images, Some(&saved));
+        assert_eq!(ordered, vec![ToolId::CropImage]);
+    }
+
+    #[test]
+    fn untouched_categories_use_the_defaults() {
+        assert_eq!(
+            ToolId::custom_order(Category::Video, None),
+            ToolId::available_for(Category::Video).to_vec()
+        );
+    }
+
+    #[test]
+    fn an_explicitly_empty_list_hides_every_tool() {
+        assert!(ToolId::custom_order(Category::Video, Some(&[])).is_empty());
     }
 }

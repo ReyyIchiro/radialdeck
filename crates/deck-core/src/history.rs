@@ -61,7 +61,10 @@ pub fn default_history_path() -> PathBuf {
     let state_dir = std::env::var_os("XDG_STATE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| base.as_ref().map(|dirs| dirs.state_dir().map(Path::to_path_buf)).flatten())
+        .or_else(|| {
+            base.as_ref()
+                .and_then(|dirs| dirs.state_dir().map(Path::to_path_buf))
+        })
         .unwrap_or_else(|| PathBuf::from("."));
     state_dir.join("radial-deck").join("history.json")
 }
@@ -139,9 +142,9 @@ impl History {
             match fs::symlink_metadata(path) {
                 Ok(metadata) => {
                     let result = if metadata.is_dir() {
-                        fs::remove_dir_all(&path)
+                        fs::remove_dir_all(path)
                     } else {
-                        fs::remove_file(&path)
+                        fs::remove_file(path)
                     };
                     match result {
                         Ok(()) => report.removed.push(path.clone()),
@@ -193,7 +196,11 @@ mod tests {
 
         let mut history = History::default();
         let id = history
-            .record("Test", vec![dir.path().join("in.txt")], vec![output.clone()])
+            .record(
+                "Test",
+                vec![dir.path().join("in.txt")],
+                vec![output.clone()],
+            )
             .unwrap();
         assert_eq!(history.entries.len(), 1);
         assert_eq!(history.entries[0].id, id);

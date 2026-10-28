@@ -3,8 +3,11 @@
 //! Every external command is built as an argument vector. No shell is used,
 //! so file names, annotation text and user parameters cannot become commands.
 
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::convert::registry::find_tool;
 
@@ -21,31 +24,100 @@ pub fn require_any(tools: &[&str]) -> ToolResult<PathBuf> {
         .ok_or_else(|| format!("{} is not installed", tools.join(" or ")))
 }
 
+/// Runs a command while forwarding its stderr and honouring cancellation.
+///
+/// The child is polled instead of blocking on `output()`, so the Cancel button
+/// stops long FFmpeg/Ghostscript runs within about 50 ms. Stderr is read on a
+/// separate thread (FFmpeg's statistics are chatty and can fill a pipe); the
+/// last lines are kept for the error message.
 pub fn run(command: &mut Command, label: &str) -> ToolResult<()> {
-    let output = command
-        .output()
+    command.stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
         .map_err(|error| format!("run {label}: {error}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let tail: Vec<&str> = stderr
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .rev()
-        .take(4)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    Err(format!(
-        "{label} failed: {}",
-        if tail.is_empty() {
-            format!("exit status {}", output.status)
-        } else {
-            tail.join(" ")
+
+    let collected = Arc::new(Mutex::new(Vec::<String>::new()));
+    let reader = child.stderr.take().map(|stderr| {
+        let collected = Arc::clone(&collected);
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stderr);
+            let mut buffer = [0u8; 4096];
+            let mut pending = String::new();
+            loop {
+                let read = match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(read) => read,
+                    Err(_) => break,
+                };
+                pending.push_str(&String::from_utf8_lossy(&buffer[..read]));
+                // FFmpeg separates statistics with carriage returns, so both
+                // delimiters count as a finished line.
+                while let Some(index) = pending.find(['\n', '\r']) {
+                    let line: String = pending.drain(..=index).collect();
+                    record_line(&collected, &line);
+                }
+            }
+            record_line(&collected, &pending);
+        })
+    });
+
+    loop {
+        if crate::job::cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Some(reader) = reader {
+                let _ = reader.join();
+            }
+            return Err(format!("{label} cancelled"));
         }
-    ))
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if let Some(reader) = reader {
+                    let _ = reader.join();
+                }
+                if status.success() {
+                    return Ok(());
+                }
+                let lines = collected.lock().unwrap();
+                let tail: Vec<&str> = lines
+                    .iter()
+                    .rev()
+                    .take(4)
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                return Err(format!(
+                    "{label} failed: {}",
+                    if tail.is_empty() {
+                        format!("exit status {status}")
+                    } else {
+                        tail.join(" ")
+                    }
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("run {label}: {error}"));
+            }
+        }
+    }
+}
+
+fn record_line(collected: &Mutex<Vec<String>>, line: &str) {
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    crate::job::report_detail(line);
+    let mut lines = collected.lock().unwrap();
+    lines.push(line.to_owned());
+    if lines.len() > 40 {
+        lines.remove(0);
+    }
 }
 
 pub fn capture(command: &mut Command, label: &str) -> ToolResult<String> {
@@ -62,11 +134,9 @@ pub fn capture(command: &mut Command, label: &str) -> ToolResult<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+/// Output directory for a source under the active operation's policy.
 pub fn source_parent(source: &Path) -> PathBuf {
-    source
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::job::destination_dir(source)
 }
 
 pub fn source_stem(source: &Path) -> String {
@@ -110,6 +180,7 @@ pub fn unique_path(dir: &Path, stem: &str, extension: &str) -> PathBuf {
             candidate = dir.join(format!("{stem}-{counter}"));
             counter += 1;
         }
+        crate::job::register(&candidate);
         return candidate;
     }
     let mut candidate = dir.join(format!("{stem}.{extension}"));
@@ -118,6 +189,7 @@ pub fn unique_path(dir: &Path, stem: &str, extension: &str) -> PathBuf {
         candidate = dir.join(format!("{stem}-{counter}.{extension}"));
         counter += 1;
     }
+    crate::job::register(&candidate);
     candidate
 }
 
@@ -130,6 +202,7 @@ pub fn unique_dir(parent: &Path, stem: &str) -> PathBuf {
         candidate = parent.join(format!("{stem}-{counter}"));
         counter += 1;
     }
+    crate::job::register(&candidate);
     candidate
 }
 

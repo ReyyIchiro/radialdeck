@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::folder::{normalize_color, Availability, Folder, FolderError, Project};
 
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Persisted application state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,6 +252,16 @@ impl Config {
             ));
         }
 
+        if self.preferences.output_subfolder.trim().is_empty() {
+            self.preferences.output_subfolder = default_output_subfolder();
+        }
+        if let crate::OutputLocation::Folder(path) = &self.preferences.output_location {
+            if !path.is_absolute() {
+                self.preferences.output_location = crate::OutputLocation::Alongside;
+                notes.push("output folder was not absolute; writing next to originals".into());
+            }
+        }
+
         if self.projects.is_empty() {
             notes.push("no projects found; created a default project".into());
             self.projects.push(Project::new("My Project", "#3b82f6"));
@@ -339,6 +349,15 @@ pub struct Preferences {
     pub terminal: Option<String>,
     #[serde(default)]
     pub theme: Theme,
+    /// Where tool and conversion outputs are written.
+    #[serde(default)]
+    pub output_location: crate::OutputLocation,
+    /// Folder name used when `output_location` is `Subfolder`.
+    #[serde(default = "default_output_subfolder")]
+    pub output_subfolder: String,
+    /// Per-category tool order and visibility; a missing key means defaults.
+    #[serde(default)]
+    pub wheel_tools: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Default for Preferences {
@@ -351,8 +370,15 @@ impl Default for Preferences {
             launch_at_login: false,
             terminal: None,
             theme: Theme::System,
+            output_location: crate::OutputLocation::Alongside,
+            output_subfolder: default_output_subfolder(),
+            wheel_tools: std::collections::BTreeMap::new(),
         }
     }
+}
+
+fn default_output_subfolder() -> String {
+    "RadialDeck".into()
 }
 
 fn default_hotkey() -> String {

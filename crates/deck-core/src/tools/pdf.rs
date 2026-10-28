@@ -34,7 +34,15 @@ where
     F: FnMut(&Path) -> ToolResult<Vec<PathBuf>>,
 {
     let mut outcome = ToolOutcome::default();
+    crate::job::set_total(sources.len());
     for source in sources {
+        if crate::job::cancelled() {
+            outcome.failures.push(ToolFailure {
+                source: source.clone(),
+                message: "Cancelled".into(),
+            });
+            break;
+        }
         match operation(source) {
             Ok(created) => outcome.created.extend(created),
             Err(message) => outcome.failures.push(ToolFailure {
@@ -42,6 +50,7 @@ where
                 message,
             }),
         }
+        crate::job::report_file(source);
     }
     outcome
 }

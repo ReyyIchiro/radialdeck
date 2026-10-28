@@ -13,6 +13,7 @@ pub fn unique_path(dir: &Path, stem: &str, extension: &str) -> PathBuf {
         candidate = dir.join(format!("{stem}-{counter}.{extension}"));
         counter += 1;
     }
+    crate::job::register(&candidate);
     candidate
 }
 
@@ -20,6 +21,7 @@ pub fn unique_path(dir: &Path, stem: &str, extension: &str) -> PathBuf {
 pub fn unique_named(dir: &Path, name: &str) -> PathBuf {
     let candidate = dir.join(name);
     if !candidate.exists() {
+        crate::job::register(&candidate);
         return candidate;
     }
     let path = Path::new(name);

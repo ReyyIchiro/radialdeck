@@ -31,12 +31,12 @@ pub fn compress(source: &Path, extension: &str) -> Result<PathBuf, ConvertError>
         }
         other => return Err(ConvertError(format!("unsupported archive target: {other}"))),
     };
-    let parent = source.parent().unwrap_or_else(|| Path::new("."));
+    let parent = crate::job::destination_dir(source);
     let stem = stem_without_archive_ext(source);
 
     // Converting an existing archive means unpacking it first, then repacking
     // its contents without an extra wrapper directory.
-    let destination = unique_path(parent, &stem, archive_extension(kind));
+    let destination = unique_path(&parent, &stem, archive_extension(kind));
     if kind == ArchiveKind::Gzip {
         if source.is_dir() || archive_kind(source) == Some(ArchiveKind::Gzip) {
             return Err(ConvertError("source is already gzip-compressed".into()));
@@ -68,7 +68,7 @@ pub fn compress(source: &Path, extension: &str) -> Result<PathBuf, ConvertError>
 }
 
 pub fn extract(source: &Path) -> Result<PathBuf, ConvertError> {
-    let parent = source.parent().unwrap_or_else(|| Path::new("."));
+    let parent = crate::job::destination_dir(source);
     let stem = stem_without_archive_ext(source);
     let mut destination = parent.join(&stem);
     let mut counter = 1;
@@ -78,6 +78,7 @@ pub fn extract(source: &Path) -> Result<PathBuf, ConvertError> {
     }
     fs::create_dir_all(&destination)
         .map_err(|error| ConvertError(format!("create {}: {error}", destination.display())))?;
+    crate::job::register(&destination);
     extract_into(source, &destination)?;
     Ok(destination)
 }

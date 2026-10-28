@@ -25,12 +25,12 @@ pub fn convert(source: &Path, target_extension: &str) -> Result<PathBuf, Convert
         .decode()
         .map_err(|error| ConvertError(format!("decode {}: {error}", source.display())))?;
 
-    let parent = source.parent().unwrap_or_else(|| Path::new("."));
+    let parent = crate::job::destination_dir(source);
     let stem = source
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_else(|| "image".into());
-    let destination = unique_path(parent, &stem, target_extension);
+    let destination = unique_path(&parent, &stem, target_extension);
     write(&image, &destination, target_extension)?;
     Ok(destination)
 }
