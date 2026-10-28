@@ -85,6 +85,8 @@ pub struct Controller {
     float: RefCell<Option<Rc<FloatShelf>>>,
     tools: Tools,
     converting: Cell<bool>,
+    cancel: RefCell<Option<deck_core::CancelToken>>,
+    progress: RefCell<Option<Rc<crate::progress_window::ProgressWindow>>>,
     history: RefCell<deck_core::History>,
     hotkey: RefCell<Option<HotkeyService>>,
     tray: RefCell<Option<ksni::blocking::Handle<Tray>>>,
@@ -161,6 +163,8 @@ impl Controller {
             float: RefCell::new(None),
             tools: Tools::detect(),
             converting: Cell::new(false),
+            cancel: RefCell::new(None),
+            progress: RefCell::new(None),
             history: RefCell::new(history),
             hotkey: RefCell::new(None),
             tray: RefCell::new(None),
@@ -687,6 +691,99 @@ impl Controller {
         self.refresh_manage();
     }
 
+    pub fn wheel_tools(&self, category: deck_core::convert::registry::Category) -> Vec<ToolId> {
+        let config = self.config.borrow();
+        let stored = config.preferences.wheel_tools.get(category.id());
+        ToolId::custom_order(category, stored.map(Vec::as_slice))
+    }
+
+    fn store_wheel_tools(
+        &self,
+        category: deck_core::convert::registry::Category,
+        tools: &[ToolId],
+    ) {
+        let ids = tools.iter().map(|tool| tool.id().to_owned()).collect();
+        self.config
+            .borrow_mut()
+            .preferences
+            .wheel_tools
+            .insert(category.id().to_owned(), ids);
+        self.save();
+    }
+
+    pub fn set_tool_visible(
+        self: &Rc<Self>,
+        category: deck_core::convert::registry::Category,
+        tool: ToolId,
+        visible: bool,
+    ) {
+        let mut list = self.wheel_tools(category);
+        if visible {
+            if !list.contains(&tool) {
+                list.push(tool);
+            }
+        } else {
+            list.retain(|item| *item != tool);
+        }
+        self.store_wheel_tools(category, &list);
+        self.refresh_tool_editor();
+    }
+
+    pub fn move_tool(
+        self: &Rc<Self>,
+        category: deck_core::convert::registry::Category,
+        tool: ToolId,
+        direction: i32,
+    ) {
+        let mut list = self.wheel_tools(category);
+        let Some(index) = list.iter().position(|item| *item == tool) else {
+            return;
+        };
+        let target = index as i32 + direction;
+        if target < 0 || target >= list.len() as i32 {
+            return;
+        }
+        list.swap(index, target as usize);
+        self.store_wheel_tools(category, &list);
+        self.refresh_tool_editor();
+    }
+
+    /// Rebuilds on the next idle turn: the switch that triggered the change is
+    /// still emitting its signal, so it must not be destroyed from inside it.
+    fn refresh_tool_editor(self: &Rc<Self>) {
+        let controller = Rc::downgrade(self);
+        glib::idle_add_local_once(move || {
+            if let Some(controller) = controller.upgrade() {
+                if let Some(settings) = controller.settings.borrow().as_ref() {
+                    settings.rebuild_tools(&controller);
+                }
+            }
+        });
+    }
+
+    pub fn set_output_location(&self, location: deck_core::OutputLocation) {
+        self.config.borrow_mut().preferences.output_location = location;
+        self.save();
+    }
+
+    pub fn set_output_subfolder(&self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let mut config = self.config.borrow_mut();
+        config.preferences.output_subfolder = name.to_owned();
+        if matches!(
+            config.preferences.output_location,
+            deck_core::OutputLocation::Subfolder(_)
+        ) {
+            config.preferences.output_location =
+                deck_core::OutputLocation::Subfolder(name.to_owned());
+        }
+        drop(config);
+        self.save();
+    }
+
     pub fn set_terminal(&self, terminal: Option<String>) {
         self.config.borrow_mut().preferences.terminal = terminal;
         self.save();
@@ -952,7 +1049,7 @@ impl Controller {
                     .iter()
                     .map(|path| (*path).clone())
                     .collect::<Vec<_>>();
-                ToolId::available_for(category)
+                self.wheel_tools(category)
                     .iter()
                     .map(|id| {
                         let reason = tools::availability(*id, category, &matching_paths);
@@ -1208,22 +1305,56 @@ impl Controller {
             sources,
             values,
         };
-        let (sender, receiver) = async_channel::bounded(1);
+        let token = deck_core::CancelToken::new();
+        *self.cancel.borrow_mut() = Some(token.clone());
+        let (sender, receiver) = async_channel::unbounded();
+        let (progress_sender, progress_receiver) = async_channel::unbounded();
+        let reporter: deck_core::job::Reporter = std::sync::Arc::new(move |progress| {
+            let _ = progress_sender.send_blocking(progress);
+        });
+        let output = self.output_location();
+        let total = request.sources.len();
         std::thread::spawn(move || {
-            let outcome = tools::execute(&request);
+            let outcome = tools::execute_with(&request, output, token, reporter);
             let _ = sender.send_blocking(outcome);
         });
+
+        if let Some(window) = self.ensure_progress_window() {
+            window.show_operation(&format!("{}…", id.label()), total);
+        }
+
         let controller = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let outcome = receiver.recv().await;
-            if let Some(controller) = controller.upgrade() {
-                controller.converting.set(false);
-                match outcome {
-                    Ok(outcome) => controller.report_tool(id, &outcome),
-                    Err(_) => controller.notify(
-                        "Tool failed",
-                        "The tool worker stopped unexpectedly. Check the log.",
-                    ),
+            loop {
+                if let Ok(progress) = progress_receiver.try_recv() {
+                    if let Some(controller) = controller.upgrade() {
+                        if let Some(window) = controller.progress.borrow().as_ref() {
+                            window.update(&progress);
+                        }
+                    }
+                    continue;
+                }
+                match receiver.try_recv() {
+                    Ok(outcome) => {
+                        if let Some(controller) = controller.upgrade() {
+                            controller.finish_job();
+                            controller.report_tool(id, &outcome);
+                        }
+                        return;
+                    }
+                    Err(async_channel::TryRecvError::Empty) => {
+                        glib::timeout_future(std::time::Duration::from_millis(60)).await;
+                    }
+                    Err(async_channel::TryRecvError::Closed) => {
+                        if let Some(controller) = controller.upgrade() {
+                            controller.finish_job();
+                            controller.notify(
+                                "Tool failed",
+                                "The tool worker stopped unexpectedly. Check the log.",
+                            );
+                        }
+                        return;
+                    }
                 }
             }
         });
@@ -1240,13 +1371,14 @@ impl Controller {
             self.record_history(id.label(), outcome.created.clone());
         }
         if failed == 0 && created > 0 {
+            let where_to = self.output_location().label().to_lowercase();
             self.notify(
                 id.label(),
                 &format!(
-                    "{} file{} created next to the original{}.",
+                    "{} file{} written to {}.",
                     created,
                     if created == 1 { "" } else { "s" },
-                    if created == 1 { "" } else { "s" }
+                    where_to
                 ),
             );
             return;
@@ -1265,14 +1397,60 @@ impl Controller {
         }
     }
 
+    fn finish_job(self: &Rc<Self>) {
+        self.converting.set(false);
+        self.cancel.borrow_mut().take();
+        if let Some(window) = self.progress.borrow().as_ref() {
+            window.finish();
+        }
+    }
+
+    fn ensure_progress_window(
+        self: &Rc<Self>,
+    ) -> Option<Rc<crate::progress_window::ProgressWindow>> {
+        if let Some(window) = self.progress.borrow().as_ref() {
+            return Some(Rc::clone(window));
+        }
+        let app = self.app.borrow().clone()?;
+        let window = Rc::new(crate::progress_window::ProgressWindow::new(&app));
+        let cancel = Rc::downgrade(self);
+        window.connect_cancel(move || {
+            if let Some(controller) = cancel.upgrade() {
+                if let Some(token) = controller.cancel.borrow().as_ref() {
+                    tracing::info!("cancel requested by the user");
+                    token.cancel();
+                }
+            }
+        });
+        *self.progress.borrow_mut() = Some(Rc::clone(&window));
+        Some(window)
+    }
+
+    fn output_location(&self) -> deck_core::OutputLocation {
+        let config = self.config.borrow();
+        match &config.preferences.output_location {
+            deck_core::OutputLocation::Subfolder(_) => {
+                deck_core::OutputLocation::Subfolder(config.preferences.output_subfolder.clone())
+            }
+            other => other.clone(),
+        }
+    }
+
     fn record_history(&self, label: &str, created: Vec<PathBuf>) {
         let path = deck_core::history::default_history_path();
         let mut history = self.history.borrow_mut();
         let sources = self.action_sources.borrow().clone();
-        if history.record(label, sources, created).is_some() {
+        let recorded = history.record(label, sources, created).is_some();
+        if recorded {
             if let Err(error) = history.save(&path) {
                 tracing::warn!("could not save history: {error}");
             }
+        }
+        // `refresh_tray` borrows the history again; the write guard must be
+        // gone first or the whole process aborts with "already mutably
+        // borrowed" right after a successful run.
+        drop(history);
+        if recorded {
             self.refresh_tray();
         }
     }
@@ -1591,28 +1769,70 @@ impl Controller {
             target_id
         );
 
-        let (sender, receiver) = async_channel::bounded(1);
+        let token = deck_core::CancelToken::new();
+        *self.cancel.borrow_mut() = Some(token.clone());
+        let (sender, receiver) = async_channel::unbounded();
+        let (progress_sender, progress_receiver) = async_channel::unbounded();
+        let reporter: deck_core::job::Reporter = std::sync::Arc::new(move |progress| {
+            let _ = progress_sender.send_blocking(progress);
+        });
         let thread_sources = sources.clone();
         let tools = self.tools;
         let thread_target = target_id.clone();
+        let output = self.output_location();
+        let total = sources.len();
         std::thread::spawn(move || {
-            let outcome = deck_core::convert(&thread_sources, category, &thread_target, &tools);
+            let outcome = deck_core::convert::convert_with(
+                &thread_sources,
+                category,
+                &thread_target,
+                &tools,
+                output,
+                token,
+                reporter,
+            );
             let _ = sender.send_blocking(outcome);
         });
 
+        if let Some(window) = self.ensure_progress_window() {
+            window.show_operation(
+                &format!("Converting to {}…", target_id.to_uppercase()),
+                total,
+            );
+        }
+
         let controller = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let outcome = receiver.recv().await;
-            if let Some(controller) = controller.upgrade() {
-                controller.converting.set(false);
-                match outcome {
-                    Ok(outcome) => controller.report_conversion(&target_id, &outcome),
-                    Err(_) => {
-                        tracing::error!("conversion worker stopped without a result");
-                        controller.notify(
-                            "Conversion failed",
-                            "The converter stopped unexpectedly. Check the log for details.",
-                        );
+            loop {
+                if let Ok(progress) = progress_receiver.try_recv() {
+                    if let Some(controller) = controller.upgrade() {
+                        if let Some(window) = controller.progress.borrow().as_ref() {
+                            window.update(&progress);
+                        }
+                    }
+                    continue;
+                }
+                match receiver.try_recv() {
+                    Ok(outcome) => {
+                        if let Some(controller) = controller.upgrade() {
+                            controller.finish_job();
+                            controller.report_conversion(&target_id, &outcome);
+                        }
+                        return;
+                    }
+                    Err(async_channel::TryRecvError::Empty) => {
+                        glib::timeout_future(std::time::Duration::from_millis(60)).await;
+                    }
+                    Err(async_channel::TryRecvError::Closed) => {
+                        if let Some(controller) = controller.upgrade() {
+                            controller.finish_job();
+                            tracing::error!("conversion worker stopped without a result");
+                            controller.notify(
+                                "Conversion failed",
+                                "The converter stopped unexpectedly. Check the log for details.",
+                            );
+                        }
+                        return;
                     }
                 }
             }
@@ -1631,13 +1851,14 @@ impl Controller {
             return;
         }
         if failed == 0 {
+            let where_to = self.output_location().label().to_lowercase();
             self.notify(
                 "Conversion complete",
                 &format!(
-                    "{} file{} written next to the original{}.",
+                    "{} file{} written to {}.",
                     created,
                     if created == 1 { "" } else { "s" },
-                    if created == 1 { "" } else { "s" }
+                    where_to
                 ),
             );
             return;

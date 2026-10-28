@@ -1,7 +1,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use deck_core::{PackageManager, Theme};
+use deck_core::tools::ToolId;
+use deck_core::{OutputLocation, PackageManager, Theme};
+use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 
@@ -21,6 +23,11 @@ pub struct SettingsWindow {
     terminal: gtk::DropDown,
     terminal_options: Rc<RefCell<Vec<String>>>,
     theme: gtk::DropDown,
+    output_mode: gtk::DropDown,
+    output_subfolder: gtk::Entry,
+    output_folder: gtk::Label,
+    choose_output_folder: gtk::Button,
+    tool_lists: gtk::Box,
     config_path: gtk::Label,
     log_path: gtk::Label,
     dependencies: gtk::Box,
@@ -126,6 +133,46 @@ impl SettingsWindow {
             &theme_dropdown,
         );
 
+        let output_mode = gtk::DropDown::from_strings(&[
+            "Next to the original",
+            "In a subfolder",
+            "In one folder",
+        ]);
+        output_mode.set_halign(gtk::Align::End);
+        output_mode.set_valign(gtk::Align::Center);
+        let output_mode_row = setting_row(
+            "Output location",
+            "Where tools and conversions write new files. Originals are never overwritten.",
+            &output_mode,
+        );
+
+        let output_subfolder = gtk::Entry::new();
+        output_subfolder.set_placeholder_text(Some("RadialDeck"));
+        output_subfolder.set_width_chars(16);
+        let output_subfolder_row = setting_row(
+            "Subfolder name",
+            "Created inside each source's folder when the subfolder mode is active.",
+            &output_subfolder,
+        );
+
+        let output_folder = gtk::Label::new(None);
+        output_folder.add_css_class("rd-subtle");
+        output_folder.set_ellipsize(pango::EllipsizeMode::Middle);
+        output_folder.set_max_width_chars(28);
+        let choose_output_folder = gtk::Button::with_label("Choose…");
+        let output_folder_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let output_folder_labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        output_folder_labels.set_hexpand(true);
+        output_folder_labels.append(&setting_title("Output folder"));
+        output_folder_labels.append(&output_folder);
+        output_folder_row.append(&output_folder_labels);
+        output_folder_row.append(&choose_output_folder);
+
+        let output_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        output_box.append(&output_mode_row);
+        output_box.append(&output_subfolder_row);
+        output_box.append(&output_folder_row);
+
         let dependencies = gtk::Box::new(gtk::Orientation::Vertical, 10);
         let dependency_summary = setting_subtitle("Checking installed programs…");
         let dependency_card = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -181,6 +228,27 @@ impl SettingsWindow {
         content.append(&card(autostart_row));
         content.append(&card(terminal_row));
         content.append(&card(theme_row));
+        content.append(&card(output_box));
+
+        // Tool wheel customisation: one row per category with up/down buttons
+        // and a switch that hides the tool. The saved order is the source of
+        // truth, so a hidden tool simply leaves the list.
+        let tool_section = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        let tool_heading = setting_title("Tool wheel");
+        let tool_hint = setting_subtitle(
+            "Choose which tools appear for each file type and in what order.              Digit shortcuts follow the order shown here.",
+        );
+        tool_section.append(&tool_heading);
+        tool_section.append(&tool_hint);
+        let tool_lists = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        tool_lists.add_css_class("rd-tool-editor");
+        let tool_scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .min_content_height(220)
+            .child(&tool_lists)
+            .build();
+        tool_section.append(&tool_scroller);
+        content.append(&card(tool_section));
         content.append(&card(dependency_card));
         content.append(&card(config_row));
         content.append(&card(log_row));
@@ -214,6 +282,11 @@ impl SettingsWindow {
             terminal,
             terminal_options: Rc::new(RefCell::new(Vec::new())),
             theme: theme_dropdown,
+            output_mode,
+            output_subfolder,
+            output_folder,
+            choose_output_folder,
+            tool_lists,
             config_path,
             log_path,
             dependencies,
@@ -336,6 +409,97 @@ impl SettingsWindow {
         {
             let controller = self.controller.clone();
             let suppress = Rc::clone(&self.suppress);
+            let window = self.window.clone();
+            self.output_mode.connect_selected_notify(move |dropdown| {
+                if suppress.get() {
+                    return;
+                }
+                let Some(controller) = controller.upgrade() else {
+                    return;
+                };
+                let current = controller.config().preferences.output_location.clone();
+                match dropdown.selected() {
+                    1 => controller.set_output_location(OutputLocation::Subfolder(
+                        controller.config().preferences.output_subfolder.clone(),
+                    )),
+                    2 => {
+                        let dialog = gtk::FileDialog::builder()
+                            .title("Choose an output folder")
+                            .modal(true)
+                            .build();
+                        let controller = controller.clone();
+                        let window = window.clone();
+                        dialog.select_folder(
+                            Some(&window),
+                            gtk::gio::Cancellable::NONE,
+                            move |result| {
+                                if let Ok(folder) = result {
+                                    if let Some(path) = folder.path() {
+                                        controller
+                                            .set_output_location(OutputLocation::Folder(path));
+                                        return;
+                                    }
+                                }
+                                // Cancelled: restore the previous mode so the UI
+                                // never claims a folder that was not chosen.
+                                let _ = current;
+                                controller.set_output_location(OutputLocation::Alongside);
+                            },
+                        );
+                    }
+                    _ => controller.set_output_location(OutputLocation::Alongside),
+                }
+            });
+        }
+        {
+            // Typing a folder name should not rewrite the config file on every
+            // keystroke, so persistence waits for a short pause.
+            let controller = self.controller.clone();
+            let pending: Rc<Cell<Option<glib::SourceId>>> = Rc::new(Cell::new(None));
+            self.output_subfolder.connect_changed(move |entry| {
+                let controller = controller.clone();
+                let text = entry.text().to_string();
+                if let Some(source) = pending.take() {
+                    source.remove();
+                }
+                let slot = Rc::clone(&pending);
+                let source = glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(500),
+                    move || {
+                        slot.set(None);
+                        if let Some(controller) = controller.upgrade() {
+                            controller.set_output_subfolder(&text);
+                        }
+                    },
+                );
+                pending.set(Some(source));
+            });
+        }
+        {
+            let controller = self.controller.clone();
+            let window = self.window.clone();
+            self.choose_output_folder.connect_clicked(move |_| {
+                let Some(controller) = controller.upgrade() else {
+                    return;
+                };
+                let dialog = gtk::FileDialog::builder()
+                    .title("Choose an output folder")
+                    .modal(true)
+                    .build();
+                let controller = controller.clone();
+                let window = window.clone();
+                dialog.select_folder(Some(&window), gtk::gio::Cancellable::NONE, move |result| {
+                    if let Ok(folder) = result {
+                        if let Some(path) = folder.path() {
+                            controller.set_output_location(OutputLocation::Folder(path));
+                        }
+                    }
+                });
+            });
+        }
+        {
+            let controller = self.controller.clone();
+            let suppress = Rc::clone(&self.suppress);
             self.theme.connect_selected_notify(move |dropdown| {
                 if suppress.get() {
                     return;
@@ -368,7 +532,15 @@ impl SettingsWindow {
         let Some(controller) = self.controller.upgrade() else {
             return;
         };
-        let (close_after, live_modifier, autostart, preferred_terminal, theme_pref) = {
+        let (
+            close_after,
+            live_modifier,
+            autostart,
+            preferred_terminal,
+            theme_pref,
+            output_location,
+            output_subfolder,
+        ) = {
             let config = controller.config();
             (
                 config.preferences.close_after_launch,
@@ -376,6 +548,8 @@ impl SettingsWindow {
                 config.preferences.launch_at_login,
                 config.preferences.terminal.clone(),
                 config.preferences.theme,
+                config.preferences.output_location.clone(),
+                config.preferences.output_subfolder.clone(),
             )
         };
 
@@ -426,6 +600,26 @@ impl SettingsWindow {
             Theme::Light => 1,
             Theme::Dark => 2,
         });
+        self.output_mode.set_selected(match output_location {
+            OutputLocation::Alongside => 0,
+            OutputLocation::Subfolder(_) => 1,
+            OutputLocation::Folder(_) => 2,
+        });
+        self.output_subfolder.set_text(&output_subfolder);
+        if let OutputLocation::Folder(path) = &output_location {
+            self.output_folder.set_text(&path.to_string_lossy());
+        } else {
+            self.output_folder.set_text("Not selected");
+        }
+        self.output_subfolder
+            .set_visible(matches!(output_location, OutputLocation::Subfolder(_)));
+        self.output_folder
+            .set_visible(matches!(output_location, OutputLocation::Folder(_)));
+        self.choose_output_folder
+            .set_visible(matches!(output_location, OutputLocation::Folder(_)));
+
+        self.rebuild_tool_lists(&controller);
+
         self.config_path
             .set_text(&controller.config_path().to_string_lossy());
         self.config_path
@@ -544,6 +738,99 @@ fn set_shortcut_error(label: &gtk::Label, error: Option<&str>) {
         _ => {
             label.set_text("");
             label.set_visible(false);
+        }
+    }
+}
+
+impl SettingsWindow {
+    pub fn rebuild_tools(&self, controller: &Rc<Controller>) {
+        self.rebuild_tool_lists(controller);
+    }
+
+    fn rebuild_tool_lists(&self, controller: &Rc<Controller>) {
+        while let Some(child) = self.tool_lists.first_child() {
+            self.tool_lists.remove(&child);
+        }
+        for category in deck_core::convert::registry::Category::ALL {
+            let ordered = controller.wheel_tools(category);
+            // Hidden tools stay listed so they can be switched back on, but
+            // they come after the visible ones: the editor has to mirror the
+            // wheel order, otherwise "move earlier" looks like a no-op.
+            let mut rows: Vec<ToolId> = ordered.clone();
+            for tool in deck_core::tools::ToolId::available_for(category) {
+                if !rows.contains(tool) {
+                    rows.push(*tool);
+                }
+            }
+
+            let group = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            group.add_css_class("rd-tool-group");
+            let title = gtk::Label::new(Some(category.label()));
+            title.add_css_class("rd-tool-group-title");
+            title.set_halign(gtk::Align::Start);
+            group.append(&title);
+            if ordered.is_empty() {
+                let empty = gtk::Label::new(Some("No tools shown for this file type"));
+                empty.add_css_class("rd-subtle");
+                empty.set_halign(gtk::Align::Start);
+                group.append(&empty);
+            }
+
+            for tool in rows {
+                let visible = ordered.contains(&tool);
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                row.add_css_class("rd-tool-row");
+
+                let toggle = gtk::Switch::new();
+                toggle.set_active(visible);
+                toggle.set_valign(gtk::Align::Center);
+                toggle.set_tooltip_text(Some("Show this tool in the wheel"));
+
+                let label = gtk::Label::new(Some(tool.short_label()));
+                label.set_halign(gtk::Align::Start);
+                label.set_hexpand(true);
+                if !visible {
+                    label.add_css_class("rd-subtle");
+                }
+
+                let up = gtk::Button::from_icon_name("go-up-symbolic");
+                up.add_css_class("flat");
+                up.set_tooltip_text(Some("Move earlier"));
+                up.set_sensitive(visible && ordered.first() != Some(&tool));
+                let down = gtk::Button::from_icon_name("go-down-symbolic");
+                down.add_css_class("flat");
+                down.set_tooltip_text(Some("Move later"));
+                down.set_sensitive(visible && ordered.last() != Some(&tool));
+
+                row.append(&toggle);
+                row.append(&label);
+                row.append(&up);
+                row.append(&down);
+                group.append(&row);
+
+                let weak = Rc::downgrade(controller);
+                toggle.connect_state_set(move |_, state| {
+                    if let Some(controller) = weak.upgrade() {
+                        controller.set_tool_visible(category, tool, state);
+                    }
+                    gtk::glib::Propagation::Proceed
+                });
+
+                let weak = Rc::downgrade(controller);
+                up.connect_clicked(move |_| {
+                    if let Some(controller) = weak.upgrade() {
+                        controller.move_tool(category, tool, -1);
+                    }
+                });
+
+                let weak = Rc::downgrade(controller);
+                down.connect_clicked(move |_| {
+                    if let Some(controller) = weak.upgrade() {
+                        controller.move_tool(category, tool, 1);
+                    }
+                });
+            }
+            self.tool_lists.append(&group);
         }
     }
 }

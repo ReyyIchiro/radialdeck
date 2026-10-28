@@ -49,6 +49,17 @@ window.rd-dialog {
 .rd-mono {
     font-family: monospace;
 }
+.rd-progress-window {
+    background: transparent;
+}
+.rd-progress-window .rd-card {
+    background: @theme_bg_color;
+    border: 1px solid alpha(currentColor, 0.12);
+    border-radius: 12px;
+}
+.rd-progress-title {
+    font-weight: 600;
+}
 .rd-card {
     border-radius: 10px;
     padding: 12px;
