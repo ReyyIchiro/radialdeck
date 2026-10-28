@@ -65,7 +65,7 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 | Riwayat + Undo | rekaman tersimpan; Undo menghapus output dan menyegarkan tray |
 | CLI `convert` | exit 0/2, `--into`, nama bentrok `-1`, `--help`; tidak menginisialisasi GTK, jalan tanpa display |
 | Mode Actions: Copy Path | clipboard berisi path absolut |
-| `scripts/ui-smoke.sh` (KWin virtual, layar nyata tidak tersentuh) | 40/40: overlay Wayland ter-map & tergambar, form Compress menulis file, Float shelf 340×420, `Esc` menutup, live-modifier, navigasi 6 halaman Settings (termasuk daftar folder proyek dan tema gelap), CLI batch; artefak per-lane `app-N.log` |
+| `scripts/ui-smoke.sh` (KWin virtual, layar nyata tidak tersentuh) | 45/45: overlay Wayland ter-map & tergambar, form Compress menulis file, Float shelf 340×420, `Esc` menutup, live-modifier, navigasi 6 halaman Settings (termasuk daftar folder proyek, dropdown lokasi output lewat keyboard, dan tema gelap), CLI batch; artefak per-lane `app-N.log` |
 | `ui-smoke.sh` isolasi bus | bus D-Bus privat; 0 proses tersisa, keluar 25 detik tanpa menggantung pipe |
 | Idle CPU (release, hidden) | 0,5% setelah 20 detik |
 | Mode Actions: Float | shelf 340×420, baris `photo.png`, tombol tutup per baris |

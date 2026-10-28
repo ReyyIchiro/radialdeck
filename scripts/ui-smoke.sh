@@ -17,6 +17,7 @@
 #   x11      - keyboard-driven flows: tool form submission, Float, Esc
 #   settings - the normal toplevel still maps in the nested session
 #   projects - the Projects page lists the folders of the active project
+#   output   - switching the output mode must not re-enter the config borrow
 #   dark     - the same window under the dark preference
 #   cli      - `radial-deck convert` runs without any display
 #
@@ -32,7 +33,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$ROOT/target/release/radial-deck"
+BIN="${RADIAL_DECK_BIN:-$ROOT/target/release/radial-deck}"
 OUT="${RADIAL_DECK_SMOKE_OUT:-${TMPDIR:-/tmp}/radial-deck-ui-smoke}"
 
 FAILURES=0
@@ -390,7 +391,40 @@ check "x11: seeded project list is on the Projects page" \
 check "x11: project list renders its folders" \
     bash -c "! compare -metric AE '$OUT/shots/settings-projects.png' '$OUT/shots/settings-projects-seeded.png' null: 2>&1 | grep -qx '0'"
 
-# --- lane 6: dark theme -----------------------------------------------------
+# --- lane 6: output mode regression -----------------------------------------
+# Switching the Output dropdown used to hold a `Ref` from controller.config()
+# across set_output_location(), whose borrow_mut() then panicked with
+# "RefCell already borrowed" and killed the app. A crash here is the bug.
+#
+# Tab has to leave the sidebar first: GtkListBox treats Tab as "next row", so
+# the page controls used to be unreachable by keyboard. Space opens the
+# dropdown popover, Down picks the second entry, Return commits it.
+start_app x11 --settings
+check "x11: output lane window is mapped" x11_focus
+sleep 1
+for _ in 1 2 3 4; do send_key Down; done   # General -> Shortcuts -> Projects -> Tools -> Output
+sleep 1
+send_key Tab
+sleep 0.4
+shoot output-before-pick
+send_key space
+sleep 0.8
+send_key Down
+sleep 0.4
+send_key Return
+sleep 1.2
+shoot output-after-pick
+check "x11: output mode switch keeps the app alive" app_alive
+check "x11: output mode switch does not panic" \
+    bash -c "! grep -qE 'already borrowed|panicked' '$APP_LOG'"
+check "x11: output mode switch persists" \
+    bash -c "grep -q '\"output_location\": *{' '$XDG_CONFIG_HOME/radial-deck/config.json'"
+# The dropdown label must actually change on screen: the config write alone
+# would still pass if the widget redrew nothing.
+check "x11: output mode dropdown shows the new choice" \
+    bash -c "! compare -metric AE '$OUT/shots/output-before-pick.png' '$OUT/shots/output-after-pick.png' null: 2>&1 | grep -qx '0'"
+
+# --- lane 7: dark theme -----------------------------------------------------
 # The settings CSS mixes theme colours (@theme_fg_color) with translucent
 # overlays, so both variants must resolve; a light-only check would miss a
 # white-on-white regression.
@@ -405,7 +439,7 @@ check "x11: no panic in dark theme" \
     bash -c "! grep -qE 'panicked|SIGABRT' '$APP_LOG'"
 sed -i 's/"theme": "dark"/"theme": "system"/' "$XDG_CONFIG_HOME/radial-deck/config.json"
 
-# --- lane 7: headless batch converter --------------------------------------
+# --- lane 8: headless batch converter --------------------------------------
 # The CLI path must not need GTK at all: it runs here with the same private
 # environment but is a separate process, so a GTK init regression would hang
 # or fail the exit status.

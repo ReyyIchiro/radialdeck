@@ -4,6 +4,7 @@ use std::rc::{Rc, Weak};
 use deck_core::convert::registry::Category;
 use deck_core::tools::ToolId;
 use deck_core::{OutputLocation, PackageManager, Theme};
+use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
@@ -411,6 +412,28 @@ impl SettingsWindow {
         window.set_child(Some(&body));
 
         {
+            // GtkListBox turns Tab into "next row" instead of leaving the list,
+            // which traps keyboard users in the sidebar: the page controls can
+            // never be reached without a pointer. Catch Tab on the way in and
+            // hand focus to the visible page. `child_focus()` walks GTK's own
+            // focus chain, so it skips scrollers and labels and honours any
+            // later reordering of the page contents.
+            let stack = stack.clone();
+            let keys = gtk::EventControllerKey::new();
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+            keys.connect_key_pressed(move |_, key, _, _| {
+                if key != gdk::Key::Tab && key != gdk::Key::ISO_Left_Tab {
+                    return glib::Propagation::Proceed;
+                }
+                if let Some(page) = stack.visible_child() {
+                    page.child_focus(gtk::DirectionType::TabForward);
+                }
+                glib::Propagation::Stop
+            });
+            nav.add_controller(keys);
+        }
+
+        {
             let stack = stack.clone();
             nav.connect_row_selected(move |_, row| {
                 if let Some(row) = row {
@@ -613,11 +636,18 @@ impl SettingsWindow {
                 let Some(controller) = controller.upgrade() else {
                     return;
                 };
-                let current = controller.config().preferences.output_location.clone();
+                // Copy out of the RefCell before the match: every branch below
+                // mutates the same cell, and a live `Ref` would make that
+                // borrow_mut() panic with "already borrowed".
+                let (current, subfolder) = {
+                    let config = controller.config();
+                    (
+                        config.preferences.output_location.clone(),
+                        config.preferences.output_subfolder.clone(),
+                    )
+                };
                 match dropdown.selected() {
-                    1 => controller.set_output_location(OutputLocation::Subfolder(
-                        controller.config().preferences.output_subfolder.clone(),
-                    )),
+                    1 => controller.set_output_location(OutputLocation::Subfolder(subfolder)),
                     2 => {
                         let dialog = gtk::FileDialog::builder()
                             .title("Choose an output folder")
