@@ -76,7 +76,9 @@ cd radial-deck
 ```
 
 Script memasang binary ke `~/.local/bin`, desktop entry, ikon, dan service menu Dolphin.
-Jalankan sekali `radial-deck --hidden` lalu setujui dialog *Global Shortcuts* KDE.
+Jalankan `radial-deck --hidden` sekali, lalu setujui dialog *Global Shortcuts* KDE.
+Aktifkan **Launch at login** di Settings supaya hotkey tetap ada setelah reboot; kalau
+hotkey diam saja, jalankan `./scripts/doctor.sh`.
 
 ### Arch / CachyOS (AUR)
 
@@ -306,7 +308,7 @@ tanpa menggantung pipe pemanggilnya.
 
 | Test | Hasil |
 |---|---|
-| Unit test | ✅ 53 lulus (`deck-core` 44, app 9) |
+| Unit test | ✅ 57 lulus (`deck-core` 46, app 11) |
 | fmt + clippy `-D warnings` | ✅ bersih |
 | Layer-shell roda konversi + roda folder | ✅ screenshot KDE Wayland |
 | Dua hotkey portal | ✅ `Ctrl+Alt+Space` dan `Ctrl+Alt+Q` aktif bersamaan |
@@ -331,7 +333,68 @@ tanpa menggantung pipe pemanggilnya.
 | Overlay X11 mengikuti monitor kursor | ✅ 1920×1080 penuh di eDP-1, bukan monitor lain |
 | Layer-shell di-anchor ke monitor kursor | ✅ roda muncul di monitor tempat pointer berada |
 | `scripts/ui-smoke.sh` (sesi KWin virtual) | ✅ 15/15 lulus tanpa menyentuh layar nyata |
+| Portal tanpa `GlobalShortcuts` saat login | ✅ retry backoff + drop-in systemd, hotkey pulih sendiri |
 | Binary release | 6.8 MiB (stripped) |
+
+---
+
+## Troubleshooting
+
+### Hotkey tidak bereaksi
+
+Gejala: aplikasi berjalan, roda bisa dibuka lewat tray, tetapi `Ctrl+Alt+Space` dan
+`Ctrl+Alt+Q` tidak melakukan apa pun.
+
+Penyebab paling umum di KDE Plasma: `xdg-desktop-portal` diaktifkan D-Bus **sebelum**
+Plasma mengekspor `XDG_CURRENT_DESKTOP` ke systemd user manager. Portal lalu tidak bisa
+mencocokkan `UseIn=KDE` pada `kde.portal`, jatuh ke backend GTK, dan backend itu tidak
+mengimplementasikan `GlobalShortcuts`. Cara tercepat memeriksa sekaligus memperbaiki:
+
+```bash
+./scripts/doctor.sh          # laporan saja
+./scripts/doctor.sh --fix    # restart portal kalau antarmukanya hilang
+```
+
+Pemeriksaan manualnya:
+
+```bash
+busctl --user introspect org.freedesktop.portal.Desktop \
+  /org/freedesktop/portal/desktop | grep GlobalShortcuts
+```
+
+Tidak ada keluaran berarti portal memang tidak menawarkan antarmuka tersebut. RadialDeck
+sudah mencoba ulang dengan backoff (2s → 60s) dan menulis alasannya di log, tetapi
+memperbaiki portalnya membuat hotkey langsung hidup:
+
+```bash
+systemctl --user restart xdg-desktop-portal
+```
+
+Aplikasi juga memantau nama bus portal, jadi kalau portal di-restart saat aplikasi
+berjalan, sesi didaftarkan ulang sendiri dalam hitungan detik — tidak perlu menutup
+RadialDeck. Log akan menampilkan `global shortcuts unavailable: the desktop portal
+restarted; retrying in 2s` lalu `shortcut … active` lagi.
+
+Agar tidak berulang setiap login, pin desktop untuk layanan portal:
+
+```bash
+mkdir -p ~/.config/systemd/user/xdg-desktop-portal.service.d
+printf '[Service]\nEnvironment=XDG_CURRENT_DESKTOP=KDE\n' \
+  > ~/.config/systemd/user/xdg-desktop-portal.service.d/desktop-env.conf
+systemctl --user daemon-reload
+systemctl --user restart xdg-desktop-portal
+```
+
+Kalau `GlobalShortcuts` **ada** tetapi tetap tidak ada reaksi, cek apakah binding pernah
+ditolak: buka Settings → *Change Shortcuts…* lalu set ulang. KDE menyimpan binding yang
+ditolak tanpa trigger, sehingga `BindShortcuts` sukses tetapi tidak ada tombol yang
+dipegang.
+
+### Hotkey hilang setelah reboot
+
+Aplikasi harus berjalan untuk memegang shortcut. Aktifkan **Launch at login** di Settings,
+atau pastikan `~/.config/autostart/io.github.raihan.RadialDeck.desktop` ada dan berisi
+`Exec="…/radial-deck" --hidden`.
 
 ---
 

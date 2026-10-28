@@ -73,13 +73,14 @@ cat <<MSG
 
 ✔ RadialDeck installed to $PREFIX
 
-  Run once to register global shortcut:
-    radial-deck --hidden
+  Start it in the background (tray + global shortcuts):
+    $BIN/radial-deck --hidden
 
-  Open the action wheel immediately:
-    radial-deck --show
-
+  Enable "Launch at login" in Settings so the hotkeys survive a reboot.
   Right-click any file in Dolphin → "RadialDeck actions…"
+
+  If a hotkey does nothing, run the diagnostics:
+    $ROOT/scripts/doctor.sh
 
   To uninstall:
     $ROOT/scripts/uninstall.sh --prefix $PREFIX
