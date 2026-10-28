@@ -15,12 +15,15 @@
 # Lanes:
 #   wayland  - layer-shell overlay actually maps and draws (screenshot proof)
 #   x11      - keyboard-driven flows: tool form submission, Float, Esc
+#   settings - the normal toplevel still maps in the nested session
+#   cli      - `radial-deck convert` runs without any display
 #
 # Usage: scripts/ui-smoke.sh
 #
 # Artifacts stay in $RADIAL_DECK_SMOKE_OUT (default /tmp/radial-deck-ui-smoke):
-# screenshots, the app log and the compositor log. Only the private runtime
-# directory and the scratch conversion files are removed.
+# screenshots, one log per app run and the compositor log. Config, state and
+# cache are redirected inside $OUT, so the real profile is never written. Only
+# the private runtime/cache directories and the scratch files are removed.
 #
 # Exit status: 0 when every check passes, 1 otherwise.
 
@@ -48,16 +51,43 @@ for tool in kwin_wayland spectacle xdotool magick compare; do
     command -v "$tool" >/dev/null || { say "missing required tool: $tool"; exit 1; }
 done
 
+# Two concurrent runs would fight over the fixed socket name and the nested
+# Xwayland display, and the geometry-based display lookup could attach to the
+# other run's server. Refuse to overlap instead of producing phantom failures.
+exec 9>"${TMPDIR:-/tmp}/radial-deck-ui-smoke.lock"
+if ! flock -n 9; then
+    say "another ui-smoke run is already using this machine; wait for it to finish"
+    exit 1
+fi
+
 rm -rf "$OUT"
-mkdir -p "$OUT/runtime" "$OUT/shots" "$OUT/work"
+mkdir -p "$OUT/runtime" "$OUT/shots" "$OUT/work" "$OUT/config" "$OUT/state" "$OUT/cache"
 chmod 700 "$OUT/runtime"
 
 export XDG_RUNTIME_DIR="$OUT/runtime"
+# Config and state (history, logs) must not touch the real profile: the test
+# app writes on save and records every output it creates. Without these two the
+# run would leak into ~/.config/radial-deck and ~/.local/state/radial-deck.
+export XDG_CONFIG_HOME="$OUT/config"
+export XDG_STATE_HOME="$OUT/state"
+export XDG_CACHE_HOME="$OUT/cache"
 export XDG_CURRENT_DESKTOP=KDE
 export RADIAL_DECK_NO_HOTKEY=1
 
+# KWin 6.4 routes XTEST injection through the EIS portal and silently drops it
+# for clients it has not been told about. `xdotool key` then reports success
+# while nothing reaches the app, which turns every keyboard check into a false
+# failure. The allowlist normally lives in the real kwinrc; this run has its own
+# empty config home, so write it here instead of reading the user's profile.
+cat >"$OUT/config/kwinrc" <<'EOF'
+[Xwayland]
+XwaylandEisNoPromptApps=xdotool
+EOF
+
 KWIN_PID=""
 APP_PID=""
+APP_LANE=0
+APP_LOG="$OUT/app.log"
 BUS_PID=""
 BUS_ADDRESS="unix:path=$OUT/bus"
 
@@ -75,6 +105,7 @@ reap_private_bus() {
         [[ "$pid" == "$$" ]] && continue
         environ="$proc/environ"
         [[ -r "$environ" ]] || continue
+        # Processes can exit between the glob and the read; that is fine.
         environ="$(tr '\0' '\n' <"$environ" 2>/dev/null)" || continue
         if grep -qF "DBUS_SESSION_BUS_ADDRESS=$BUS_ADDRESS" <<<"$environ" ||
             grep -qxF "XDG_RUNTIME_DIR=$OUT/runtime" <<<"$environ"; then
@@ -87,6 +118,7 @@ start_private_bus() {
     dbus-daemon --session --address="$BUS_ADDRESS" --nofork --nopidfile \
         >"$OUT/bus.log" 2>&1 &
     BUS_PID=$!
+    disown "$BUS_PID" 2>/dev/null
     for _ in $(seq 50); do
         [[ -S "$OUT/bus" ]] && break
         sleep 0.1
@@ -100,16 +132,16 @@ cleanup() {
     [[ -n "$KWIN_PID" ]] && kill -9 "$KWIN_PID" 2>/dev/null
     # Services can be reactivated while the bus is still alive, so reap, drop the
     # bus, then reap once more for anything that came up in between.
-    reap_private_bus
+    reap_private_bus 2>/dev/null
     [[ -n "$BUS_PID" ]] && kill -9 "$BUS_PID" 2>/dev/null
-    reap_private_bus
+    reap_private_bus 2>/dev/null
     # Waiting on a killed compositor can hang on its still-open pipe, so reap
     # with a deadline instead of a bare `wait`.
     for _ in $(seq 20); do
         kill -0 "$KWIN_PID" 2>/dev/null || break
         sleep 0.1
     done
-    rm -rf "$OUT/runtime" "$OUT/work" "$OUT/bus"
+    rm -rf "$OUT/runtime" "$OUT/work" "$OUT/bus" "$OUT/cache"
 }
 trap cleanup EXIT
 
@@ -117,6 +149,7 @@ start_compositor() {
     kwin_wayland --virtual --xwayland --socket wayland-rdtest \
         --width 1280 --height 800 --no-lockscreen >"$OUT/kwin.log" 2>&1 &
     KWIN_PID=$!
+    disown "$KWIN_PID" 2>/dev/null
     for _ in $(seq 100); do
         [[ -S "$XDG_RUNTIME_DIR/wayland-rdtest" ]] && break
         sleep 0.1
@@ -142,9 +175,20 @@ start_compositor() {
 start_app() {
     local backend="$1"
     shift
-    [[ -n "$APP_PID" ]] && { kill -9 "$APP_PID" 2>/dev/null; APP_PID=""; }
-    env GDK_BACKEND="$backend" "$BIN" "$@" >"$OUT/app.log" 2>&1 &
+    if [[ -n "$APP_PID" ]]; then
+        kill -9 "$APP_PID" 2>/dev/null
+        wait "$APP_PID" 2>/dev/null
+        APP_PID=""
+    fi
+    # Keep each lane's log: a crash in one lane must not be erased by the next
+    # start, and the filename makes the failing flow obvious from the artifacts.
+    APP_LANE=$((APP_LANE + 1))
+    APP_LOG="$OUT/app-$APP_LANE.log"
+    env GDK_BACKEND="$backend" "$BIN" "$@" >"$APP_LOG" 2>&1 &
     APP_PID=$!
+    # Without disown, bash prints "Killed" for every replaced app and clutters
+    # the report; the PID is still ours to manage.
+    disown "$APP_PID" 2>/dev/null
     sleep 3
 }
 
@@ -164,14 +208,18 @@ drawn_pixels() {
     magick "$OUT/shots/$1.png" -colorspace gray -threshold 12% -format '%[fx:mean*w*h]' info:
 }
 
-log_clean() { ! grep -qE 'assertion .* failed|init_layer_shell' "$OUT/app.log"; }
+log_clean() { ! grep -qE 'assertion .* failed|init_layer_shell' "$APP_LOG"; }
 app_alive() { kill -0 "$APP_PID" 2>/dev/null; }
 
 x11_focus() {
     local window
     window="$(xdotool search --onlyvisible --name RadialDeck | head -1)"
     [[ -n "$window" ]] || return 1
-    xdotool windowactivate --sync "$window" 2>/dev/null
+    # `windowactivate` goes through the WM and KWin may refuse it under focus
+    # stealing prevention, which silently breaks every later key press. Setting
+    # the input focus directly is deterministic inside this throwaway session.
+    xdotool windowraise "$window" 2>/dev/null
+    xdotool windowfocus --sync "$window" 2>/dev/null
 }
 
 send_key() { xdotool key --clearmodifiers "$1"; }
@@ -220,7 +268,12 @@ check "x11: compress form wrote photo-compressed.png" test -f "$OUT/work/photo-c
 check "x11: compressed output keeps the source dimensions" \
     bash -c "[[ \$(magick identify -format '%wx%h' '$OUT/work/photo-compressed.png') == \$(magick identify -format '%wx%h' '$OUT/work/photo.png') ]]"
 check "x11: compress run is logged as finished" \
-    grep -q 'tool compress finished: 1 created, 0 failed' "$OUT/app.log"
+    grep -q 'tool compress finished: 1 created, 0 failed' "$APP_LOG"
+# Recording history used to re-enter the history borrow and abort the process
+# right after a successful run, so liveness here is a real regression check.
+check "x11: process survives a completed tool run" app_alive
+check "x11: no panic after a completed tool run" \
+    bash -c "! grep -qE 'panicked|already mutably borrowed' '$APP_LOG'"
 
 start_app x11 --actions "$OUT/work/photo.png"
 check "x11: actions overlay is mapped" x11_focus
@@ -250,7 +303,7 @@ modifier_switch() {
     sleep 0.4
     xdotool keyup "$1" >/dev/null 2>&1
     sleep 0.8
-    grep -q "live-modifier switch to $2" "$OUT/app.log"
+    grep -q "live-modifier switch to $2" "$APP_LOG"
 }
 check "x11: Shift switches to the Convert wheel" \
     modifier_switch shift Convert
@@ -261,9 +314,60 @@ check "x11: Super switches to the Tools wheel" \
 check "x11: Alt also switches to the Tools wheel" \
     modifier_switch alt Tools
 check "x11: sources survive a modifier switch" \
-    bash -c "grep -q 'show actions: mode=Tools sources=\[\"$OUT/work/photo.png\"\]' '$OUT/app.log' || ! grep -q 'show actions: mode=Tools sources=\[\]' '$OUT/app.log'"
+    bash -c "grep -q 'show actions: mode=Tools sources=\[\"$OUT/work/photo.png\"\]' '$APP_LOG' || ! grep -q 'show actions: mode=Tools sources=\[\]' '$APP_LOG'"
 send_key Escape
 sleep 1
+
+# --- lane 4: settings window ------------------------------------------------
+# The settings window is a regular toplevel, not a layer-shell surface, so it
+# also proves the app still maps a normal window inside the nested session.
+start_app wayland --settings
+sleep 1
+shoot settings
+sleep 0.5
+check "wayland: settings window draws" \
+    test "$(drawn_pixels settings | cut -d. -f1)" -gt 20000
+# A Wayland toplevel is not visible to xdotool, so liveness plus a clean log
+# is the meaningful check here; the screenshot above proves it rendered.
+check "wayland: settings process stays alive" app_alive
+check "wayland: settings log has no panic" \
+    bash -c "! grep -qE 'panicked|SIGABRT' '$APP_LOG'"
+
+# --- lane 5: headless batch converter --------------------------------------
+# The CLI path must not need GTK at all: it runs here with the same private
+# environment but is a separate process, so a GTK init regression would hang
+# or fail the exit status.
+batch_dir="$OUT/work/batch"
+mkdir -p "$batch_dir/out"
+cp "$OUT/work/photo.png" "$batch_dir/one.png"
+if "$BIN" convert --to webp --into "$batch_dir/out" "$batch_dir/one.png" \
+    >"$OUT/batch.log" 2>&1; then
+    batch_rc=0
+else
+    batch_rc=$?
+fi
+check "cli: batch conversion exits 0" test "$batch_rc" -eq 0
+check "cli: batch conversion wrote one.webp" test -f "$batch_dir/out/one.webp"
+if "$BIN" convert --to webp --into "$batch_dir/out" "$batch_dir/one.png" \
+    >>"$OUT/batch.log" 2>&1; then
+    batch_rc=0
+else
+    batch_rc=$?
+fi
+check "cli: a second run never overwrites" test -f "$batch_dir/out/one-1.webp"
+if "$BIN" convert --to definitely-not-a-format "$batch_dir/one.png" \
+    >>"$OUT/batch.log" 2>&1; then
+    bad_rc=0
+else
+    bad_rc=$?
+fi
+check "cli: an unknown target exits 2" test "$bad_rc" -eq 2
+if "$BIN" convert --help >"$OUT/batch-help.log" 2>&1; then
+    help_rc=0
+else
+    help_rc=$?
+fi
+check "cli: convert --help exits 0" test "$help_rc" -eq 0
 
 say ""
 say "checks: $CHECKS, failures: $FAILURES"
