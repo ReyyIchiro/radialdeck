@@ -85,6 +85,7 @@ pub struct Controller {
     float: RefCell<Option<Rc<FloatShelf>>>,
     tools: Tools,
     converting: Cell<bool>,
+    history: RefCell<deck_core::History>,
     hotkey: RefCell<Option<HotkeyService>>,
     tray: RefCell<Option<ksni::blocking::Handle<Tray>>>,
     hold_guard: RefCell<Option<gtk::gio::ApplicationHoldGuard>>,
@@ -140,6 +141,9 @@ impl Controller {
             }
         };
 
+        let history_path = deck_core::history::default_history_path();
+        let history = deck_core::History::load(&history_path);
+
         Rc::new(Self {
             app: RefCell::new(None),
             store,
@@ -157,6 +161,7 @@ impl Controller {
             float: RefCell::new(None),
             tools: Tools::detect(),
             converting: Cell::new(false),
+            history: RefCell::new(history),
             hotkey: RefCell::new(None),
             tray: RefCell::new(None),
             hold_guard: RefCell::new(None),
@@ -209,6 +214,8 @@ impl Controller {
             self.display_shortcut(),
             self.display_projects_shortcut(),
         );
+        let mut tray = tray;
+        tray.set_recent(self.history.borrow().recent(5).to_vec());
         use ksni::blocking::TrayMethods;
         match tray.spawn() {
             Ok(handle) => {
@@ -231,6 +238,7 @@ impl Controller {
                     TrayCommand::Manage => controller.open_manage(),
                     TrayCommand::Settings => controller.open_settings(),
                     TrayCommand::ToggleAutostart => controller.toggle_autostart(),
+                    TrayCommand::Undo(id) => controller.undo_operation(id),
                     TrayCommand::Quit => controller.quit(),
                 }
             }
@@ -1228,6 +1236,9 @@ impl Controller {
             "tool {} finished: {created} created, {failed} failed",
             id.id()
         );
+        if created > 0 {
+            self.record_history(id.label(), outcome.created.clone());
+        }
         if failed == 0 && created > 0 {
             self.notify(
                 id.label(),
@@ -1251,6 +1262,54 @@ impl Controller {
             self.notify(id.label(), message);
         } else {
             self.notify(id.label(), "No files were produced.");
+        }
+    }
+
+    fn record_history(&self, label: &str, created: Vec<PathBuf>) {
+        let path = deck_core::history::default_history_path();
+        let mut history = self.history.borrow_mut();
+        let sources = self.action_sources.borrow().clone();
+        if history.record(label, sources, created).is_some() {
+            if let Err(error) = history.save(&path) {
+                tracing::warn!("could not save history: {error}");
+            }
+            self.refresh_tray();
+        }
+    }
+
+    pub fn undo_operation(self: &Rc<Self>, id: u64) {
+        let path = deck_core::history::default_history_path();
+        let mut history = self.history.borrow_mut();
+        let Some(report) = history.undo(id) else {
+            return;
+        };
+        if let Err(error) = history.save(&path) {
+            tracing::warn!("could not save history: {error}");
+        }
+        drop(history);
+        self.refresh_tray();
+        if report.is_clean() {
+            self.notify(
+                "Undone",
+                &format!(
+                    "{} item{} removed.",
+                    report.removed.len(),
+                    if report.removed.len() == 1 { "" } else { "s" }
+                ),
+            );
+        } else {
+            let (path, error) = &report.failures[0];
+            self.notify(
+                "Could not undo everything",
+                &format!("{}: {error}", path.display()),
+            );
+        }
+    }
+
+    fn refresh_tray(&self) {
+        let recent = self.history.borrow().recent(5).to_vec();
+        if let Some(handle) = self.tray.borrow().as_ref() {
+            handle.update(move |tray: &mut Tray| tray.set_recent(recent));
         }
     }
 
@@ -1547,7 +1606,7 @@ impl Controller {
             if let Some(controller) = controller.upgrade() {
                 controller.converting.set(false);
                 match outcome {
-                    Ok(outcome) => controller.report_conversion(&outcome),
+                    Ok(outcome) => controller.report_conversion(&target_id, &outcome),
                     Err(_) => {
                         tracing::error!("conversion worker stopped without a result");
                         controller.notify(
@@ -1560,10 +1619,13 @@ impl Controller {
         });
     }
 
-    fn report_conversion(&self, outcome: &deck_core::Outcome) {
+    fn report_conversion(&self, target_id: &str, outcome: &deck_core::Outcome) {
         let created = outcome.created.len();
         let failed = outcome.failures.len();
         tracing::info!("conversion finished: {created} created, {failed} failed");
+        if created > 0 {
+            self.record_history(target_id, outcome.created.clone());
+        }
         if created == 0 && failed == 0 {
             self.notify("Nothing converted", "No files matched the selected format.");
             return;

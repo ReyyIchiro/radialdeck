@@ -1,13 +1,15 @@
 use async_channel::Sender;
-use ksni::menu::{CheckmarkItem, StandardItem};
+use deck_core::HistoryEntry;
+use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum TrayCommand {
     Show,
     Projects,
     Manage,
     Settings,
     ToggleAutostart,
+    Undo(u64),
     Quit,
 }
 
@@ -16,6 +18,7 @@ pub struct Tray {
     pub autostart: bool,
     pub shortcut: String,
     pub projects_shortcut: String,
+    recent: Vec<HistoryEntry>,
 }
 
 impl Tray {
@@ -30,7 +33,56 @@ impl Tray {
             autostart,
             shortcut,
             projects_shortcut,
+            recent: Vec::new(),
         }
+    }
+
+    pub fn set_recent(&mut self, recent: Vec<HistoryEntry>) {
+        self.recent = recent;
+    }
+
+    fn recent_menu(&self) -> ksni::MenuItem<Self> {
+        if self.recent.is_empty() {
+            return SubMenu {
+                label: "Recent Operations".into(),
+                submenu: vec![StandardItem {
+                    label: "Nothing yet".into(),
+                    enabled: false,
+                    ..Default::default()
+                }
+                .into()],
+                ..Default::default()
+            }
+            .into();
+        }
+        let now = deck_core::history::now();
+        let items: Vec<ksni::MenuItem<Self>> = self
+            .recent
+            .iter()
+            .map(|entry| {
+                let id = entry.id;
+                let age = deck_core::history::relative_time(entry.timestamp, now);
+                let count = entry.created.len();
+                let label = format!(
+                    "Undo {} · {} file{} · {age}",
+                    entry.label,
+                    count,
+                    if count == 1 { "" } else { "s" }
+                );
+                StandardItem {
+                    label,
+                    activate: Box::new(move |tray: &mut Tray| tray.send(TrayCommand::Undo(id))),
+                    ..Default::default()
+                }
+                .into()
+            })
+            .collect();
+        SubMenu {
+            label: "Recent Operations".into(),
+            submenu: items,
+            ..Default::default()
+        }
+        .into()
     }
 
     fn send(&self, command: TrayCommand) {
@@ -83,6 +135,7 @@ impl ksni::Tray for Tray {
                 ..Default::default()
             }
             .into(),
+            self.recent_menu(),
             MenuItem::Separator,
             StandardItem {
                 label: "Manage Folders…".into(),
