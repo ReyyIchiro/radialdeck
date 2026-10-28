@@ -23,10 +23,12 @@ pub enum WheelMode {
 }
 
 impl WheelMode {
+    /// Primary modifier shown in the UI. KDE Plasma reserves bare Super for
+    /// the application launcher, so Tools advertises the Alt alias instead.
     pub fn key_label(self) -> &'static str {
         match self {
             Self::Convert => "Shift",
-            Self::Tools => "Super",
+            Self::Tools => "Alt",
             Self::Actions => "Ctrl",
         }
     }
@@ -160,9 +162,14 @@ impl ActionLauncher {
             let button =
                 gtk::Button::with_label(&format!("{}  {}", mode.key_label(), mode.mode_label()));
             button.add_css_class("rd-mode");
+            let alias = match mode {
+                WheelMode::Tools => " (or Super)",
+                _ => "",
+            };
             button.set_tooltip_text(Some(&format!(
-                "{} while the wheel is open, or press F{}",
+                "{}{} while the wheel is open, or press F{}",
                 mode.key_label(),
+                alias,
                 match mode {
                     WheelMode::Convert => 1,
                     WheelMode::Tools => 2,
@@ -322,7 +329,13 @@ impl ActionLauncher {
                     gdk::Key::Shift_L | gdk::Key::Shift_R | gdk::Key::F1 => {
                         Some(WheelMode::Convert)
                     }
-                    gdk::Key::Super_L | gdk::Key::Super_R | gdk::Key::F2 => Some(WheelMode::Tools),
+                    // Alt is the reliable alias for Tools: Plasma grabs bare
+                    // Super for its own launcher before the overlay sees it.
+                    gdk::Key::Alt_L
+                    | gdk::Key::Alt_R
+                    | gdk::Key::Super_L
+                    | gdk::Key::Super_R
+                    | gdk::Key::F2 => Some(WheelMode::Tools),
                     gdk::Key::Control_L | gdk::Key::Control_R | gdk::Key::F3 => {
                         Some(WheelMode::Actions)
                     }

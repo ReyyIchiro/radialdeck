@@ -522,6 +522,29 @@ mod tests {
     }
 
     #[test]
+    fn live_modifier_defaults_on_for_existing_configs() {
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        value["schema"] = serde_json::json!(3);
+        value["preferences"]
+            .as_object_mut()
+            .unwrap()
+            .remove("live_modifier");
+
+        let mut config: Config = serde_json::from_value(value).unwrap();
+        assert!(config.preferences.live_modifier);
+        assert!(config.normalize().is_empty());
+        assert_eq!(config.schema, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn live_modifier_can_be_disabled() {
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        value["preferences"]["live_modifier"] = serde_json::json!(false);
+        let config: Config = serde_json::from_value(value).unwrap();
+        assert!(!config.preferences.live_modifier);
+    }
+
+    #[test]
     fn hotkey_is_pretty_printed() {
         assert_eq!(pretty_hotkey("CTRL+ALT+SPACE"), "Ctrl + Alt + Space");
         assert_eq!(pretty_hotkey("super+shift+k"), "Super + Shift + K");

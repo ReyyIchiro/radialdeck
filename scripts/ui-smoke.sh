@@ -237,6 +237,34 @@ check "x11: Escape hides the overlay" \
 check "x11: process survives the overlay cycle" app_alive
 check "x11: no layer-shell assertion in log" log_clean
 
+# --- lane 3: live-modifier switching ---------------------------------------
+# Tangerine-style gesture: while the wheel is open, a bare modifier key
+# switches mode. xdotool sends the key to the focused overlay, exactly like a
+# real key press; the controller logs the switch at INFO so the check is
+# deterministic instead of comparing screenshots.
+start_app x11 --actions "$OUT/work/photo.png"
+x11_focus
+sleep 1
+modifier_switch() {
+    xdotool keydown "$1" >/dev/null 2>&1
+    sleep 0.4
+    xdotool keyup "$1" >/dev/null 2>&1
+    sleep 0.8
+    grep -q "live-modifier switch to $2" "$OUT/app.log"
+}
+check "x11: Shift switches to the Convert wheel" \
+    modifier_switch shift Convert
+check "x11: Control switches to the Actions wheel" \
+    modifier_switch ctrl Actions
+check "x11: Super switches to the Tools wheel" \
+    modifier_switch super Tools
+check "x11: Alt also switches to the Tools wheel" \
+    modifier_switch alt Tools
+check "x11: sources survive a modifier switch" \
+    bash -c "grep -q 'show actions: mode=Tools sources=\[\"$OUT/work/photo.png\"\]' '$OUT/app.log' || ! grep -q 'show actions: mode=Tools sources=\[\]' '$OUT/app.log'"
+send_key Escape
+sleep 1
+
 say ""
 say "checks: $CHECKS, failures: $FAILURES"
 [[ $FAILURES -eq 0 ]]
