@@ -6,8 +6,8 @@ sudah terbukti, apa yang belum, dan apa berikutnya.
 
 ## Snapshot
 
-- Tanggal: 2026-10-25
-- Versi: 0.1.0 (schema config 3)
+- Tanggal: 2026-10-28
+- Versi: 0.1.0 (schema config 5)
 - Platform terverifikasi: CachyOS, KDE Plasma 6, Wayland, GTK 4.20 / layer-shell
 - Fokus: Linux tahap 1 selesai; Windows/macOS belum dimulai
 
@@ -34,7 +34,7 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 |---|---|
 | `cargo fmt --all` | bersih |
 | `cargo clippy --workspace --all-targets -- -D warnings` | bersih |
-| `cargo test --workspace` | 53 lulus (44 core + 9 app) |
+| `cargo test --workspace` | 85 lulus (69 core + 16 app) |
 | `cargo build --release --locked` | lulus |
 | Dua shortcut portal | `Ctrl+Alt+Space` → quick actions, `Ctrl+Alt+Q` → project folders |
 | Klik luar lalu satu kali hotkey | membuka overlay kembali (regresi fixed) |
@@ -58,8 +58,14 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 | `join_videos` dua klip | `joined.mp4` setelah path concat dibuat absolut |
 | Form Compress (kualitas 60) dari UI | `photo-compressed.png` 96×64 tertulis |
 | Live-modifier switching (Shift/Super/Ctrl) | mode berganti instan, sumber file ter-seed dipertahankan; dapat dimatikan di Settings |
+| Progres + Cancel | stderr FFmpeg di-stream ke panel; cancel menghentikan child dan menghapus output parsial |
+| Bug: panic setelah tool sukses | `record_history` meminjam riwayat dua kali; diperbaiki, smoke test kini menjaga liveness setelah run |
+| Lokasi output | `alongside` / `subfolder` / `folder` diuji lewat unit test dan konversi nyata |
+| Urutan tool per kategori | unit test untuk urutan, filter kategori, dan daftar kosong |
+| Riwayat + Undo | rekaman tersimpan; Undo menghapus output dan menyegarkan tray |
+| CLI `convert` | exit 0/2, `--into`, nama bentrok `-1`, `--help`; tidak menginisialisasi GTK, jalan tanpa display |
 | Mode Actions: Copy Path | clipboard berisi path absolut |
-| `scripts/ui-smoke.sh` (KWin virtual, layar nyata tidak tersentuh) | 15/15: overlay Wayland ter-map & tergambar, form Compress menulis file, Float shelf 340×420, `Esc` menutup |
+| `scripts/ui-smoke.sh` (KWin virtual, layar nyata tidak tersentuh) | 30/30: overlay Wayland ter-map & tergambar, form Compress menulis file, Float shelf 340×420, `Esc` menutup, live-modifier, settings, CLI batch; artefak per-lane `app-N.log` |
 | `ui-smoke.sh` isolasi bus | bus D-Bus privat; 0 proses tersisa, keluar 25 detik tanpa menggantung pipe |
 | Idle CPU (release, hidden) | 0,5% setelah 20 detik |
 | Mode Actions: Float | shelf 340×420, baris `photo.png`, tombol tutup per baris |
@@ -67,7 +73,7 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 | `Ctrl+A` di form | memilih teks; mode tidak berpindah ke Actions |
 | Overlay X11 | fullscreen pada monitor pointer (1920×1080 eDP-1) |
 | Layer-shell dua monitor | roda muncul di monitor tempat pointer berada |
-| Binary release | 6.5 MiB, stripped |
+| Binary release | 6.9 MiB, stripped |
 
 Catatan: konversi tidak berubah pada iterasi ini; hasil sebelumnya tetap berlaku selama
 tidak ada perubahan pada `deck-core::convert`.

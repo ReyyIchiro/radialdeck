@@ -39,6 +39,11 @@ kanan file di Dolphin untuk langsung membuka roda konversi.
 | Tema mengikuti sistem (KDE color scheme + GTK) / paksa Light / Dark | ✅ |
 | Konfigurasi JSON atomik di `XDG_CONFIG_HOME`; migrasi schema | ✅ |
 | Log harian di `XDG_STATE_HOME` (retensi 7 file) | ✅ |
+| Progres langsung + tombol **Cancel** untuk tool/konversi panjang | ✅ |
+| Lokasi output: di samping file, subfolder, atau satu folder tetap | ✅ |
+| Urutan & visibilitas tool per kategori (Settings) | ✅ |
+| Riwayat operasi + Undo dari tray | ✅ |
+| CLI batch `radial-deck convert` tanpa membuka UI | ✅ |
 | Renderer Cairo default: ringan, tidak membutuhkan GPU | ✅ |
 
 ---
@@ -111,9 +116,20 @@ install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 | `radial-deck --projects` | Buka roda folder proyek |
 | `radial-deck --hidden` | Mulai tersembunyi di tray (autostart) |
 | `radial-deck --manage` | Jendela manajemen folder proyek |
-| `radial-deck --settings` | Pengaturan hotkey, autostart, tema |
+| `radial-deck --settings` | Pengaturan hotkey, autostart, tema, output, urutan tool |
 | `radial-deck --reset-config` | Hapus konfigurasi dan mulai ulang |
+| `radial-deck convert --to webp FILES…` | Konversi batch headless, cetak path hasil |
 | `radial-deck --version` / `--help` | Versi / bantuan |
+
+Subcommand batch tidak memuat GTK sama sekali, jadi bisa dipakai lewat SSH:
+
+```bash
+radial-deck convert --to webp --into ~/hasil foto1.png foto2.png
+radial-deck convert --to mp4 --subfolder Converted clip.mov
+```
+
+Path hasil dicetak satu per baris (kecuali `--quiet`); kegagalan per file ke stderr.
+Exit code `0` hanya bila semua file berhasil, `2` untuk argumen/target yang tidak valid.
 
 ### Shortcut & interaksi roda
 
@@ -135,9 +151,18 @@ install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 | Klik tengah pusat | Kelola project (atau buka folder saat hanya satu) |
 | Klik kanan item | Menu konteks (buka, terminal, salin, edit, hapus) |
 
-Konversi berjalan di thread terpisah; roda langsung tertutup dan hasil ditulis **di
-folder yang sama** dengan file asli (nama bentrok tidak pernah ditimpa). Notifikasi
-menampilkan ringkasan sukses/gagal.
+Konversi dan tool berjalan di thread terpisah; roda langsung tertutup. Panel progres kecil
+muncul di pojok kanan bawah (layer-shell, tanpa mengambil fokus keyboard) dan menampilkan
+file yang sedang diproses plus output mentah FFmpeg/Ghostscript. Tombol **Cancel**
+menghentikan proses anak dan menghapus output parsial yang sudah terdaftar. Notifikasi
+menampilkan ringkasan sukses/gagal. Hasilnya juga masuk riwayat tray
+(**Recent Operations → Undo …**): Undo hanya menghapus file yang dibuat operasi itu, jadi
+file lama tidak pernah ikut terhapus. Riwayat disimpan terpisah di
+`$XDG_STATE_HOME/radial-deck/history.json` (maksimal 30 entri, tidak mengotori config).
+
+Default output adalah **folder yang sama** dengan file asli dan nama bentrok tidak pernah
+ditimpa (`foto.webp`, `foto-1.webp`, …). Lokasi output bisa diubah di **Settings → Output
+location** menjadi subfolder (default `RadialDeck`) atau satu folder tetap.
 
 ### Format
 
@@ -163,13 +188,18 @@ untuk kategori file aktif. Tool yang butuh parameter membuka form di dalam panel
 menjalankan, `Esc` kembali ke roda. Selama form terbuka, `Ctrl`/`Shift`/`Super` tetap
 menjadi modifier teks dan tidak mengganti mode.
 
-Semua tool menulis hasil di folder yang sama dengan sumber, memakai nama unik, dan tidak
-pernah menimpa file yang ada. Contoh: **Compress** (kualitas gambar / CRF video / bitrate
+Semua tool memakai kebijakan lokasi output yang sama dengan konversi, memakai nama unik,
+dan tidak pernah menimpa file yang ada. Contoh: **Compress** (kualitas gambar / CRF video / bitrate
 audio / preset PDF), **Crop**, **Edit** (brightness, contrast, saturation, rotate, flip),
 **Annotate**, **Frame**, **Redact**, **Create PDF**, **Merge PDFs**, **Split PDF**,
 **Organize PDF**, **Join Videos**, **Trim**, **Crop Video**, **Change Speed**,
 **Snapshots**, **Split Video**, **Mute**, **Normalize Audio**, **Channels**,
 **Audio → Video**, **Extract Archive**.
+
+Urutan tool di roda bisa diatur per kategori lewat **Settings → Wheel tools**: saklar
+menentukan tool tampil atau tidak, panah menggeser urutannya, dan urutan itu langsung
+menentukan digit `1`–`9` saat roda dibuka. Mematikan semua tool untuk satu kategori
+disengaja dan tidak dikembalikan ke default secara diam-diam.
 
 ### Actions
 
@@ -213,10 +243,18 @@ dan saat ada beberapa folder pusat membuka Manage.
 Folder: `$XDG_CONFIG_HOME/radial-deck/config.json` (default `~/.config/radial-deck/config.json`).
 Ditulis otomatis dan atomik; tidak perlu edit manual. Path konversi tidak disimpan.
 
-Schema saat ini **3**. File schema 1 dibaca sebagai schema 2 saat load dengan shortcut
-project default; file schema 2 yang masih memakai default lama `CTRL+ALT+P` dimigrasikan
-ke `CTRL+ALT+Q`, lalu ditulis sebagai schema 3 pada perubahan config berikutnya. File yang
-lebih baru ditolak dengan pesan jelas, bukan ditimpa.
+Schema saat ini **5**. File lama dimigrasikan saat load: shortcut project default lama
+`CTRL+ALT+P` menjadi `CTRL+ALT+Q`, dan schema 4 mendapat preferensi output serta daftar
+tool per kategori dengan nilai default. File yang lebih baru ditolak dengan pesan jelas,
+bukan ditimpa.
+
+Kunci baru di `preferences`:
+
+| Kunci | Arti |
+|---|---|
+| `output_location` | `"alongside"`, `{"subfolder": "RadialDeck"}`, atau `{"folder": "/path"}` |
+| `output_subfolder` | Nama subfolder yang dipakai mode `subfolder` |
+| `wheel_tools` | Peta `kategori → [id tool]`; urutan menentukan digit `1`–`9`, daftar kosong menyembunyikan semua |
 
 Di KDE, portal menyimpan binding yang sudah pernah disetujui pengguna. Jika binding lama
 masih `Ctrl+Alt+P`, buka **Settings → Configure Shortcuts** sekali dan pilih `Ctrl+Alt+Q`;
@@ -243,6 +281,8 @@ crates/
 │       ├── archive.rs         # zip/tar/gzip
 │       └── mod.rs             # orkestrasi batch + Outcome
 │   ├── tools/                 # 26 file tool lokal (image, media, pdf, shell)
+│   ├── job.rs                 # scope output policy, progres, cancel, cleanup
+│   ├── history.rs             # riwayat operasi + Undo
 │   └── file_actions.rs        # copy/move/trash helpers tanpa shell
 └── radial-deck/               # shell Linux
     └── src/
@@ -256,7 +296,9 @@ crates/
         ├── project_tabs.rs    # tab project, overflow +N, sinkronisasi state
         ├── widgets.rs         # helper tombol ikon dan klaster warna
         ├── manage.rs          # CRUD project/folder, warna, urutan
-        ├── settings.rs        # dua shortcut, autostart, terminal, tema, log
+        ├── progress_window.rs # panel progres layer-shell tanpa fokus + Cancel
+        ├── batch.rs           # subcommand `convert` headless
+        ├── settings.rs        # shortcut, autostart, tema, output, urutan tool, log
         ├── hotkey.rs          # GlobalShortcuts portal (dua binding)
         ├── tray.rs            # StatusNotifierItem
         ├── logging.rs         # log harian XDG
@@ -289,11 +331,12 @@ framebuffer offscreen. Layar, pointer, dan fokus keyboard Anda tidak tersentuh.
 
 ```bash
 cargo build --release
-scripts/ui-smoke.sh          # 15 pemeriksaan, exit 1 bila ada yang gagal
+scripts/ui-smoke.sh          # 30 pemeriksaan, exit 1 bila ada yang gagal
 ```
 
-Dua lane yang diuji: **wayland** (overlay benar-benar ter-map dan tergambar, dibuktikan
-screenshot) dan **x11** (form tool, Float shelf, `Esc`, lewat Xwayland bersarang).
+Lima lane yang diuji: **wayland** (overlay benar-benar ter-map dan tergambar, dibuktikan
+screenshot), **x11** (form tool, Float shelf, `Esc`, live-modifier, lewat Xwayland
+bersarang), **settings**, dan **CLI batch** (tanpa GTK sama sekali).
 Butuh `kwin_wayland`, `spectacle`, `xdotool`, dan `magick`. Screenshot serta log tersimpan
 di `/tmp/radial-deck-ui-smoke` (ubah dengan `RADIAL_DECK_SMOKE_OUT`).
 
@@ -308,7 +351,7 @@ tanpa menggantung pipe pemanggilnya.
 
 | Test | Hasil |
 |---|---|
-| Unit test | ✅ 57 lulus (`deck-core` 46, app 11) |
+| Unit test | ✅ 85 lulus (`deck-core` 69, app 16) |
 | fmt + clippy `-D warnings` | ✅ bersih |
 | Layer-shell roda konversi + roda folder | ✅ screenshot KDE Wayland |
 | Dua hotkey portal | ✅ `Ctrl+Alt+Space` dan `Ctrl+Alt+Q` aktif bersamaan |
@@ -332,9 +375,14 @@ tanpa menggantung pipe pemanggilnya.
 | Form menahan `Ctrl`/`Shift`/`Super` | ✅ `Ctrl+A` memilih teks, mode tidak berpindah |
 | Overlay X11 mengikuti monitor kursor | ✅ 1920×1080 penuh di eDP-1, bukan monitor lain |
 | Layer-shell di-anchor ke monitor kursor | ✅ roda muncul di monitor tempat pointer berada |
-| `scripts/ui-smoke.sh` (sesi KWin virtual) | ✅ 15/15 lulus tanpa menyentuh layar nyata |
+| Progres + Cancel | ✅ stream stderr FFmpeg, output parsial dibersihkan, proses tetap hidup |
+| Lokasi output (subfolder / folder tetap) | ✅ unit test + konversi nyata ke folder terpisah |
+| Urutan tool kustom per kategori | ✅ unit test; daftar kosong menyembunyikan semua tool |
+| Riwayat + Undo | ✅ entri tersimpan, Undo menghapus output dan memperbarui tray |
+| CLI batch `convert` | ✅ exit 0/2, nama bentrok `-1`, tanpa inisialisasi GTK (jalan di SSH) |
+| `scripts/ui-smoke.sh` (sesi KWin virtual) | ✅ 30/30 lulus tanpa menyentuh layar nyata |
 | Portal tanpa `GlobalShortcuts` saat login | ✅ retry backoff + drop-in systemd, hotkey pulih sendiri |
-| Binary release | 6.8 MiB (stripped) |
+| Binary release | 6.9 MiB (stripped) |
 
 ---
 

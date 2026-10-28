@@ -17,14 +17,14 @@ keputusan platform, bukan checklist harian.
 
 Cakupan: satu roda tiga mode (Convert, Tools, Actions), dua hotkey portal, layer-shell,
 tray, autostart, Dolphin service menu, konversi lokal, 26 file tool dengan form parameter,
-Float shelf, konfigurasi schema 3, installer user-local, PKGBUILD, CI.
+Float shelf, progres + cancel, lokasi output, urutan tool per kategori, riwayat + Undo,
+CLI batch `convert`, konfigurasi schema 5, installer user-local, PKGBUILD, CI.
 
 Sisa tahap Linux:
 
 | Item | Alasan | Ukuran |
 |---|---|---|
 | Preview sebelum eksekusi tool | Tangerine menampilkan hasil sebelum menulis | besar |
-| Progres + batal untuk tool panjang | Video/PDF besar memblokir thread kerja | sedang |
 | Flatpak | Distribusi aman; konverter perlu akses host | sedang |
 | Aksen warna KDE | Panel lebih menyatu dengan Plasma | kecil |
 | Audit aksesibilitas | Keyboard sudah baik; screen reader belum diuji | kecil |

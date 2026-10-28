@@ -185,6 +185,12 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
 - Schema 3 memindahkan default shortcut project dari `CTRL+ALT+P` ke `CTRL+ALT+Q`; hanya
   nilai default lama yang dimigrasikan, shortcut pilihan pengguna dibiarkan. File dengan
   schema lebih baru ditolak sebelum ditulis.
+- Schema 4 menambahkan riwayat operasi; schema 5 menambahkan `preferences.output_location`,
+  `preferences.output_subfolder`, dan `preferences.wheel_tools`. Keduanya aditif: config
+  lama tetap terbaca dan mendapat nilai default saat di-normalisasi.
+- `wheel_tools` memakai `Option<&[String]>` di API: kunci yang tidak ada berarti "pakai
+  default", sedangkan daftar kosong berarti "sembunyikan semua tool" — pilihan eksplisit
+  pengguna tidak boleh diam-diam kembali ke default.
 - Config disimpan ulang hanya saat ada perubahan; refresh UI tidak menulis disk.
 
 ## Keamanan
@@ -196,8 +202,14 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
   terhadap dimensi sumber, warna harus `#rrggbb`, dan pilihan berasal dari daftar `Field`.
   Nama terminal dari settings harus nama executable polos (tanpa `/`, spasi, atau flag).
 - Device id KDE Connect divalidasi sebagai hex sebelum dikirim ke `kdeconnect-cli`.
-- Path sumber divalidasi ada dan dinormalisasi; output selalu di direktori sumber dan
-  operasi menolak menimpa file yang sudah ada.
+- Path sumber divalidasi ada dan dinormalisasi; operasi menolak menimpa file yang sudah
+  ada dan memakai `unique_path` untuk memberi sufiks angka.
+- Lokasi output dibatasi ke direktori sumber, subfolder di dalamnya, atau folder absolut
+  pilihan pengguna; nama subfolder tidak boleh mengandung `..` (dinormalisasi menjadi
+  `.._`), sehingga tidak bisa keluar dari folder sumber.
+- Setiap path output didaftarkan di scope operasi sebelum ditulis. Saat Cancel ditekan,
+  proses anak dibunuh lalu hanya path yang terdaftar yang dihapus, sehingga file milik
+  pengguna tidak pernah tersentuh.
 - Format target tidak dapat diinjeksi dari CLI; hanya id yang ada di registry kategori
   yang dijalankan.
 - Tidak ada evaluasi kode/konfigurasi; JSON hanya data.
