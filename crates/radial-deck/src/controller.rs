@@ -748,9 +748,29 @@ impl Controller {
         self.refresh_tool_editor();
     }
 
+    /// Drops the saved order for one category so the built-in defaults apply
+    /// again. Returns whether there was anything to reset.
+    pub fn reset_wheel_tools(
+        self: &Rc<Self>,
+        category: deck_core::convert::registry::Category,
+    ) -> bool {
+        let removed = self
+            .config
+            .borrow_mut()
+            .preferences
+            .wheel_tools
+            .remove(category.id())
+            .is_some();
+        if removed {
+            self.save();
+        }
+        self.refresh_tool_editor();
+        removed
+    }
+
     /// Rebuilds on the next idle turn: the switch that triggered the change is
     /// still emitting its signal, so it must not be destroyed from inside it.
-    fn refresh_tool_editor(self: &Rc<Self>) {
+    pub fn refresh_tool_editor(self: &Rc<Self>) {
         let controller = Rc::downgrade(self);
         glib::idle_add_local_once(move || {
             if let Some(controller) = controller.upgrade() {

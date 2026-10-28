@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
+use deck_core::convert::registry::Category;
 use deck_core::tools::ToolId;
 use deck_core::{OutputLocation, PackageManager, Theme};
 use gtk::glib;
@@ -11,8 +12,29 @@ use crate::actions;
 use crate::controller::Controller;
 use crate::theme;
 
+/// Page order and identifiers. The sidebar rows and the stack pages are built
+/// from the same list, so adding a page means touching one place only.
+const PAGE_IDS: [&str; 6] = [
+    "general",
+    "shortcuts",
+    "projects",
+    "tools",
+    "output",
+    "advanced",
+];
+
+const SIDEBAR: [(&str, &str); 6] = [
+    ("emblem-system-symbolic", "General"),
+    ("input-keyboard-symbolic", "Shortcuts"),
+    ("folder-symbolic", "Projects"),
+    ("applications-utilities-symbolic", "Tool wheel"),
+    ("folder-download-symbolic", "Output"),
+    ("applications-system-symbolic", "Advanced"),
+];
+
 pub struct SettingsWindow {
     window: gtk::ApplicationWindow,
+    nav: gtk::ListBox,
     quick_shortcut: gtk::Label,
     projects_shortcut: gtk::Label,
     quick_error: gtk::Label,
@@ -25,9 +47,14 @@ pub struct SettingsWindow {
     theme: gtk::DropDown,
     output_mode: gtk::DropDown,
     output_subfolder: gtk::Entry,
+    output_subfolder_row: gtk::Box,
     output_folder: gtk::Label,
-    choose_output_folder: gtk::Button,
+    output_folder_row: gtk::Box,
+    tool_category: gtk::DropDown,
+    tool_summary: gtk::Label,
     tool_lists: gtk::Box,
+    project_summary: gtk::Label,
+    project_list: gtk::Box,
     config_path: gtk::Label,
     log_path: gtk::Label,
     dependencies: gtk::Box,
@@ -41,15 +68,10 @@ impl SettingsWindow {
         let window = gtk::ApplicationWindow::builder()
             .application(app)
             .title("RadialDeck — Settings")
-            .default_width(660)
-            .default_height(780)
+            .default_width(900)
+            .default_height(660)
             .build();
         window.add_css_class("rd-dialog");
-
-        let header = gtk::HeaderBar::new();
-        let title = gtk::Label::new(Some("Settings"));
-        title.add_css_class("rd-title");
-        header.set_title_widget(Some(&title));
 
         let quick_shortcut = gtk::Label::new(None);
         quick_shortcut.add_css_class("rd-badge");
@@ -59,10 +81,11 @@ impl SettingsWindow {
         let quick_error = shortcut_error_label();
         let projects_error = shortcut_error_label();
 
+        // --- Shortcuts page -------------------------------------------------
         let shortcut_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        shortcut_box.append(&setting_title("Shortcuts"));
+        shortcut_box.append(&setting_title("Global shortcuts"));
         shortcut_box.append(&setting_subtitle(
-            "Two independent global shortcuts, registered through the desktop portal. The system may ask you to confirm them once.",
+            "Two independent shortcuts, registered through the desktop portal. The system may ask you to confirm them once.",
         ));
         shortcut_box.append(&shortcut_line(
             "Quick actions",
@@ -81,13 +104,29 @@ impl SettingsWindow {
         change.set_halign(gtk::Align::End);
         shortcut_box.append(&change);
 
+        // --- Projects page --------------------------------------------------
+        let project_summary = setting_subtitle("");
+        let project_labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        project_labels.set_hexpand(true);
+        project_labels.append(&setting_title("Projects & folders"));
+        project_labels.append(&project_summary);
+        let open_wheel = gtk::Button::with_label("Open Wheel");
         let manage_button = gtk::Button::with_label("Manage…");
-        let manage_row = setting_row(
-            "Projects & folders",
-            "Create projects, rename folders, pick colors, and reorder the wheel.",
-            &manage_button,
-        );
+        let manage_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        manage_buttons.append(&open_wheel);
+        manage_buttons.append(&manage_button);
+        let manage_row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+        manage_row.append(&project_labels);
+        manage_row.append(&manage_buttons);
+        // Read-only overview: the Manage window owns editing, but seeing the
+        // folders here answers "what is on my wheel?" without a detour.
+        let project_list = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let projects_card = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        projects_card.append(&manage_row);
+        projects_card.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        projects_card.append(&project_list);
 
+        // --- General page ---------------------------------------------------
         let close_switch = gtk::Switch::new();
         close_switch.set_halign(gtk::Align::End);
         close_switch.set_valign(gtk::Align::Center);
@@ -115,6 +154,13 @@ impl SettingsWindow {
             &autostart_switch,
         );
 
+        let behavior_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        behavior_box.append(&close_row);
+        behavior_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        behavior_box.append(&live_row);
+        behavior_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        behavior_box.append(&autostart_row);
+
         let terminal = gtk::DropDown::from_strings(&["Auto-detect"]);
         terminal.set_halign(gtk::Align::End);
         terminal.set_valign(gtk::Align::Center);
@@ -133,6 +179,7 @@ impl SettingsWindow {
             &theme_dropdown,
         );
 
+        // --- Output page ----------------------------------------------------
         let output_mode = gtk::DropDown::from_strings(&[
             "Next to the original",
             "In a subfolder",
@@ -173,6 +220,37 @@ impl SettingsWindow {
         output_box.append(&output_subfolder_row);
         output_box.append(&output_folder_row);
 
+        // --- Tool wheel page ------------------------------------------------
+        let category_labels: Vec<&str> = Category::ALL.iter().map(|item| item.label()).collect();
+        let tool_category = gtk::DropDown::from_strings(&category_labels);
+        tool_category.set_valign(gtk::Align::Center);
+        let tool_summary = setting_subtitle("");
+        let tool_lists = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        tool_lists.add_css_class("rd-tool-editor");
+        let reset_tools = gtk::Button::with_label("Reset");
+        reset_tools.set_valign(gtk::Align::Center);
+        reset_tools.set_tooltip_text(Some("Restore the built-in order for this file type"));
+
+        let tool_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let type_label = setting_title("File type");
+        type_label.set_valign(gtk::Align::Center);
+        tool_header.append(&type_label);
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        tool_header.append(&spacer);
+        tool_header.append(&tool_category);
+        tool_header.append(&reset_tools);
+
+        let tool_section = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        tool_section.append(&tool_header);
+        tool_section.append(&tool_summary);
+        tool_section.append(&tool_lists);
+        let tool_hint = setting_subtitle(
+            "Hidden tools stay in the list after the visible ones. Digit shortcuts follow this order.",
+        );
+        tool_section.append(&tool_hint);
+
+        // --- Advanced page --------------------------------------------------
         let dependencies = gtk::Box::new(gtk::Orientation::Vertical, 10);
         let dependency_summary = setting_subtitle("Checking installed programs…");
         let dependency_card = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -214,64 +292,139 @@ impl SettingsWindow {
         log_row.append(&log_labels);
         log_row.append(&open_logs);
 
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
-        content.set_margin_top(24);
-        content.set_margin_bottom(24);
-        content.set_margin_start(24);
-        content.set_margin_end(24);
-        content.set_halign(gtk::Align::Center);
-        content.set_width_request(560);
-        content.append(&card(shortcut_box));
-        content.append(&card(manage_row));
-        content.append(&card(live_row));
-        content.append(&card(close_row));
-        content.append(&card(autostart_row));
-        content.append(&card(terminal_row));
-        content.append(&card(theme_row));
-        content.append(&card(output_box));
-
-        // Tool wheel customisation: one row per category with up/down buttons
-        // and a switch that hides the tool. The saved order is the source of
-        // truth, so a hidden tool simply leaves the list.
-        let tool_section = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        let tool_heading = setting_title("Tool wheel");
-        let tool_hint = setting_subtitle(
-            "Choose which tools appear for each file type and in what order.              Digit shortcuts follow the order shown here.",
+        // --- Pages and sidebar ----------------------------------------------
+        let general = page_content(
+            "General",
+            "Appearance, launch behavior, and the terminal used by actions.",
         );
-        tool_section.append(&tool_heading);
-        tool_section.append(&tool_hint);
-        let tool_lists = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        tool_lists.add_css_class("rd-tool-editor");
-        let tool_scroller = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .min_content_height(220)
-            .child(&tool_lists)
-            .build();
-        tool_section.append(&tool_scroller);
-        content.append(&card(tool_section));
-        content.append(&card(dependency_card));
-        content.append(&card(config_row));
-        content.append(&card(log_row));
+        general.append(&card(theme_row));
+        general.append(&card(terminal_row));
+        general.append(&card(behavior_box));
 
+        let shortcuts = page_content(
+            "Shortcuts",
+            "Global hotkeys that open the two wheels from anywhere.",
+        );
+        shortcuts.append(&card(shortcut_box));
+
+        let projects = page_content(
+            "Projects",
+            "Each project is a wheel of folders you can launch in one gesture.",
+        );
+        projects.append(&card(projects_card));
+
+        let tools = page_content(
+            "Tool wheel",
+            "Choose which tools appear for each file type and in what order.",
+        );
+        tools.append(&card(tool_section));
+
+        let output = page_content(
+            "Output",
+            "Where converted files and tool results are written. Originals are never overwritten.",
+        );
+        output.append(&card(output_box));
+
+        let advanced = page_content(
+            "Advanced",
+            "Optional programs, configuration files, and logs.",
+        );
+        advanced.append(&card(dependency_card));
+        advanced.append(&card(config_row));
+        advanced.append(&card(log_row));
         let footer = gtk::Label::new(Some(&format!(
             "RadialDeck {} · MIT · folders stay on this device",
             env!("CARGO_PKG_VERSION")
         )));
         footer.add_css_class("rd-footer");
-        content.append(&footer);
+        footer.set_margin_top(4);
+        advanced.append(&footer);
 
-        let scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .child(&content)
-            .build();
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        root.append(&header);
-        root.append(&scrolled);
-        window.set_child(Some(&root));
+        let stack = gtk::Stack::new();
+        stack.set_hexpand(true);
+        stack.set_vexpand(true);
+        stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        stack.set_transition_duration(120);
+        for (id, content) in PAGE_IDS
+            .iter()
+            .zip([&general, &shortcuts, &projects, &tools, &output, &advanced])
+        {
+            stack.add_named(&page_scroller(content), Some(*id));
+        }
+
+        let nav = gtk::ListBox::new();
+        nav.add_css_class("rd-sidebar");
+        nav.set_selection_mode(gtk::SelectionMode::Single);
+        nav.set_activate_on_single_click(true);
+        nav.set_margin_start(8);
+        nav.set_margin_end(8);
+        nav.set_vexpand(true);
+        for (icon_name, label) in SIDEBAR {
+            let row = gtk::ListBoxRow::new();
+            row.set_activatable(true);
+            let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            content.set_margin_top(6);
+            content.set_margin_bottom(6);
+            content.set_margin_start(10);
+            content.set_margin_end(10);
+            let icon = gtk::Image::from_icon_name(icon_name);
+            icon.add_css_class("rd-sidebar-icon");
+            let text = gtk::Label::new(Some(label));
+            text.set_halign(gtk::Align::Start);
+            text.set_hexpand(true);
+            content.append(&icon);
+            content.append(&text);
+            row.set_child(Some(&content));
+            nav.append(&row);
+        }
+
+        let sidebar_header = gtk::Box::new(gtk::Orientation::Vertical, 1);
+        sidebar_header.set_margin_top(16);
+        sidebar_header.set_margin_bottom(10);
+        sidebar_header.set_margin_start(18);
+        sidebar_header.set_margin_end(18);
+        let app_name = gtk::Label::new(Some("RadialDeck"));
+        app_name.add_css_class("rd-sidebar-app");
+        app_name.set_halign(gtk::Align::Start);
+        let app_sub = gtk::Label::new(Some("Settings"));
+        app_sub.add_css_class("rd-sidebar-sub");
+        app_sub.set_halign(gtk::Align::Start);
+        sidebar_header.append(&app_name);
+        sidebar_header.append(&app_sub);
+
+        let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        sidebar.add_css_class("rd-sidebar-pane");
+        sidebar.set_size_request(216, -1);
+        sidebar.append(&sidebar_header);
+        sidebar.append(&nav);
+        let version = gtk::Label::new(Some(&format!("v{}", env!("CARGO_PKG_VERSION"))));
+        version.add_css_class("rd-sidebar-version");
+        version.set_halign(gtk::Align::Start);
+        version.set_margin_start(18);
+        version.set_margin_bottom(14);
+        sidebar.append(&version);
+
+        let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        body.append(&sidebar);
+        body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        body.append(&stack);
+        window.set_child(Some(&body));
+
+        {
+            let stack = stack.clone();
+            nav.connect_row_selected(move |_, row| {
+                if let Some(row) = row {
+                    if let Some(id) = PAGE_IDS.get(row.index() as usize) {
+                        stack.set_visible_child_name(id);
+                    }
+                }
+            });
+        }
+        nav.select_row(nav.row_at_index(0).as_ref());
 
         let settings = Self {
             window,
+            nav,
             quick_shortcut,
             projects_shortcut,
             quick_error,
@@ -284,9 +437,14 @@ impl SettingsWindow {
             theme: theme_dropdown,
             output_mode,
             output_subfolder,
+            output_subfolder_row,
             output_folder,
-            choose_output_folder,
+            output_folder_row,
+            tool_category,
+            tool_summary,
             tool_lists,
+            project_summary,
+            project_list,
             config_path,
             log_path,
             dependencies,
@@ -295,18 +453,31 @@ impl SettingsWindow {
             suppress: Rc::new(Cell::new(false)),
         };
 
-        settings.connect_signals(&change, &manage_button, &open_folder, &open_logs, &recheck);
+        settings.connect_signals(
+            &change,
+            &manage_button,
+            &open_wheel,
+            &open_folder,
+            &open_logs,
+            &choose_output_folder,
+            &recheck,
+            &reset_tools,
+        );
         settings.refresh();
         settings
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn connect_signals(
         &self,
         change: &gtk::Button,
         manage: &gtk::Button,
+        open_wheel: &gtk::Button,
         open_folder: &gtk::Button,
         open_logs: &gtk::Button,
+        choose_output_folder: &gtk::Button,
         recheck: &gtk::Button,
+        reset_tools: &gtk::Button,
     ) {
         {
             let dependencies = self.dependencies.clone();
@@ -334,6 +505,14 @@ impl SettingsWindow {
         }
         {
             let controller = self.controller.clone();
+            open_wheel.connect_clicked(move |_| {
+                if let Some(controller) = controller.upgrade() {
+                    controller.show_launcher();
+                }
+            });
+        }
+        {
+            let controller = self.controller.clone();
             open_folder.connect_clicked(move |_| {
                 if let Some(controller) = controller.upgrade() {
                     controller.open_config_folder();
@@ -345,6 +524,23 @@ impl SettingsWindow {
             open_logs.connect_clicked(move |_| {
                 if let Some(controller) = controller.upgrade() {
                     controller.open_log_folder();
+                }
+            });
+        }
+        {
+            let controller = self.controller.clone();
+            self.tool_category.connect_selected_notify(move |_| {
+                if let Some(controller) = controller.upgrade() {
+                    controller.refresh_tool_editor();
+                }
+            });
+        }
+        {
+            let controller = self.controller.clone();
+            let dropdown = self.tool_category.clone();
+            reset_tools.connect_clicked(move |_| {
+                if let Some(controller) = controller.upgrade() {
+                    controller.reset_wheel_tools(selected_category(&dropdown));
                 }
             });
         }
@@ -478,7 +674,7 @@ impl SettingsWindow {
         {
             let controller = self.controller.clone();
             let window = self.window.clone();
-            self.choose_output_folder.connect_clicked(move |_| {
+            choose_output_folder.connect_clicked(move |_| {
                 let Some(controller) = controller.upgrade() else {
                     return;
                 };
@@ -522,6 +718,11 @@ impl SettingsWindow {
 
     pub fn present(&self) {
         self.window.present();
+        // Focus the page list so Up/Down switch pages without the pointer.
+        let nav = self.nav.clone();
+        glib::idle_add_local_once(move || {
+            nav.grab_focus();
+        });
     }
 
     pub fn window(&self) -> &gtk::ApplicationWindow {
@@ -540,6 +741,8 @@ impl SettingsWindow {
             theme_pref,
             output_location,
             output_subfolder,
+            project_count,
+            folder_count,
         ) = {
             let config = controller.config();
             (
@@ -550,6 +753,12 @@ impl SettingsWindow {
                 config.preferences.theme,
                 config.preferences.output_location.clone(),
                 config.preferences.output_subfolder.clone(),
+                config.projects.len(),
+                config
+                    .projects
+                    .iter()
+                    .map(|project| project.folders.len())
+                    .sum::<usize>(),
             )
         };
 
@@ -611,12 +820,30 @@ impl SettingsWindow {
         } else {
             self.output_folder.set_text("Not selected");
         }
-        self.output_subfolder
+        self.output_subfolder_row
             .set_visible(matches!(output_location, OutputLocation::Subfolder(_)));
-        self.output_folder
+        self.output_folder_row
             .set_visible(matches!(output_location, OutputLocation::Folder(_)));
-        self.choose_output_folder
-            .set_visible(matches!(output_location, OutputLocation::Folder(_)));
+
+        self.rebuild_project_list(&controller);
+        if project_count == 0 {
+            self.project_summary
+                .set_text("No projects yet — create one to fill the project wheel.");
+        } else {
+            let projects = if project_count == 1 {
+                "project"
+            } else {
+                "projects"
+            };
+            let folders = if folder_count == 1 {
+                "folder"
+            } else {
+                "folders"
+            };
+            self.project_summary.set_text(&format!(
+                "{project_count} {projects} · {folder_count} {folders}"
+            ));
+        }
 
         self.rebuild_tool_lists(&controller);
 
@@ -747,92 +974,208 @@ impl SettingsWindow {
         self.rebuild_tool_lists(controller);
     }
 
+    /// Lists every project with its folders, marking the active one. Long
+    /// folder paths are ellipsized in the middle so the tail (the part that
+    /// tells sibling folders apart) stays readable.
+    fn rebuild_project_list(&self, controller: &Rc<Controller>) {
+        while let Some(child) = self.project_list.first_child() {
+            self.project_list.remove(&child);
+        }
+        let config = controller.config();
+        if config.projects.is_empty() {
+            let empty = gtk::Label::new(Some("No projects yet."));
+            empty.add_css_class("rd-subtle");
+            empty.set_halign(gtk::Align::Start);
+            self.project_list.append(&empty);
+            return;
+        }
+        for project in &config.projects {
+            let active = config.active_project == project.id;
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            row.add_css_class("rd-project-row");
+            row.append(&crate::widgets::color_dot(&project.color, 12));
+            let name = gtk::Label::new(Some(&project.name));
+            name.add_css_class("rd-title");
+            name.set_halign(gtk::Align::Start);
+            row.append(&name);
+            if active {
+                let badge = gtk::Label::new(Some("Active"));
+                badge.add_css_class("rd-badge");
+                row.append(&badge);
+            }
+            let count = project.folders.len();
+            let label = if count == 1 {
+                "1 folder".to_string()
+            } else {
+                format!("{count} folders")
+            };
+            let badge = gtk::Label::new(Some(&label));
+            badge.add_css_class("rd-subtle");
+            badge.set_hexpand(true);
+            badge.set_halign(gtk::Align::End);
+            row.append(&badge);
+            self.project_list.append(&row);
+
+            for folder in &project.folders {
+                let item = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                item.set_margin_start(22);
+                let name = gtk::Label::new(Some(&folder.label));
+                name.set_halign(gtk::Align::Start);
+                item.append(&name);
+                let path = gtk::Label::new(Some(&folder.path.to_string_lossy()));
+                path.add_css_class("rd-subtle");
+                path.set_ellipsize(pango::EllipsizeMode::Middle);
+                path.set_hexpand(true);
+                path.set_halign(gtk::Align::Start);
+                path.set_tooltip_text(Some(&folder.path.to_string_lossy()));
+                item.append(&path);
+                self.project_list.append(&item);
+            }
+        }
+    }
+
     fn rebuild_tool_lists(&self, controller: &Rc<Controller>) {
         while let Some(child) = self.tool_lists.first_child() {
             self.tool_lists.remove(&child);
         }
-        for category in deck_core::convert::registry::Category::ALL {
-            let ordered = controller.wheel_tools(category);
-            // Hidden tools stay listed so they can be switched back on, but
-            // they come after the visible ones: the editor has to mirror the
-            // wheel order, otherwise "move earlier" looks like a no-op.
-            let mut rows: Vec<ToolId> = ordered.clone();
-            for tool in deck_core::tools::ToolId::available_for(category) {
-                if !rows.contains(tool) {
-                    rows.push(*tool);
+        let category = selected_category(&self.tool_category);
+        let ordered = controller.wheel_tools(category);
+        let available = ToolId::available_for(category);
+        let hidden = available
+            .iter()
+            .filter(|tool| !ordered.contains(tool))
+            .count();
+        self.tool_summary.set_text(&format!(
+            "{} of {} tools shown · {} hidden",
+            ordered.len(),
+            available.len(),
+            hidden
+        ));
+
+        // Hidden tools stay listed so they can be switched back on, but they
+        // come after the visible ones: the editor has to mirror the wheel
+        // order, otherwise "move earlier" looks like a no-op.
+        let mut rows: Vec<ToolId> = ordered.clone();
+        for tool in available {
+            if !rows.contains(tool) {
+                rows.push(*tool);
+            }
+        }
+
+        if ordered.is_empty() {
+            let empty = gtk::Label::new(Some("No tools shown for this file type"));
+            empty.add_css_class("rd-subtle");
+            empty.set_halign(gtk::Align::Start);
+            empty.set_margin_top(6);
+            empty.set_margin_bottom(6);
+            self.tool_lists.append(&empty);
+        }
+
+        for tool in rows {
+            let visible = ordered.contains(&tool);
+            let index = ordered.iter().position(|item| *item == tool);
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            row.add_css_class("rd-tool-row");
+
+            let toggle = gtk::Switch::new();
+            toggle.set_active(visible);
+            toggle.set_valign(gtk::Align::Center);
+            toggle.set_tooltip_text(Some("Show this tool in the wheel"));
+
+            let position = gtk::Label::new(Some(&match index {
+                Some(index) => (index + 1).to_string(),
+                None => String::new(),
+            }));
+            position.add_css_class("rd-tool-index");
+
+            let label = gtk::Label::new(Some(tool.short_label()));
+            label.set_halign(gtk::Align::Start);
+            label.set_hexpand(true);
+            if !visible {
+                label.add_css_class("rd-subtle");
+            }
+
+            let up = gtk::Button::from_icon_name("go-up-symbolic");
+            up.add_css_class("flat");
+            up.set_tooltip_text(Some("Move earlier"));
+            up.set_sensitive(visible && ordered.first() != Some(&tool));
+            let down = gtk::Button::from_icon_name("go-down-symbolic");
+            down.add_css_class("flat");
+            down.set_tooltip_text(Some("Move later"));
+            down.set_sensitive(visible && ordered.last() != Some(&tool));
+
+            row.append(&toggle);
+            row.append(&position);
+            row.append(&label);
+            row.append(&up);
+            row.append(&down);
+            self.tool_lists.append(&row);
+
+            let weak = Rc::downgrade(controller);
+            toggle.connect_state_set(move |_, state| {
+                if let Some(controller) = weak.upgrade() {
+                    controller.set_tool_visible(category, tool, state);
                 }
-            }
+                gtk::glib::Propagation::Proceed
+            });
 
-            let group = gtk::Box::new(gtk::Orientation::Vertical, 4);
-            group.add_css_class("rd-tool-group");
-            let title = gtk::Label::new(Some(category.label()));
-            title.add_css_class("rd-tool-group-title");
-            title.set_halign(gtk::Align::Start);
-            group.append(&title);
-            if ordered.is_empty() {
-                let empty = gtk::Label::new(Some("No tools shown for this file type"));
-                empty.add_css_class("rd-subtle");
-                empty.set_halign(gtk::Align::Start);
-                group.append(&empty);
-            }
-
-            for tool in rows {
-                let visible = ordered.contains(&tool);
-                let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                row.add_css_class("rd-tool-row");
-
-                let toggle = gtk::Switch::new();
-                toggle.set_active(visible);
-                toggle.set_valign(gtk::Align::Center);
-                toggle.set_tooltip_text(Some("Show this tool in the wheel"));
-
-                let label = gtk::Label::new(Some(tool.short_label()));
-                label.set_halign(gtk::Align::Start);
-                label.set_hexpand(true);
-                if !visible {
-                    label.add_css_class("rd-subtle");
+            let weak = Rc::downgrade(controller);
+            up.connect_clicked(move |_| {
+                if let Some(controller) = weak.upgrade() {
+                    controller.move_tool(category, tool, -1);
                 }
+            });
 
-                let up = gtk::Button::from_icon_name("go-up-symbolic");
-                up.add_css_class("flat");
-                up.set_tooltip_text(Some("Move earlier"));
-                up.set_sensitive(visible && ordered.first() != Some(&tool));
-                let down = gtk::Button::from_icon_name("go-down-symbolic");
-                down.add_css_class("flat");
-                down.set_tooltip_text(Some("Move later"));
-                down.set_sensitive(visible && ordered.last() != Some(&tool));
-
-                row.append(&toggle);
-                row.append(&label);
-                row.append(&up);
-                row.append(&down);
-                group.append(&row);
-
-                let weak = Rc::downgrade(controller);
-                toggle.connect_state_set(move |_, state| {
-                    if let Some(controller) = weak.upgrade() {
-                        controller.set_tool_visible(category, tool, state);
-                    }
-                    gtk::glib::Propagation::Proceed
-                });
-
-                let weak = Rc::downgrade(controller);
-                up.connect_clicked(move |_| {
-                    if let Some(controller) = weak.upgrade() {
-                        controller.move_tool(category, tool, -1);
-                    }
-                });
-
-                let weak = Rc::downgrade(controller);
-                down.connect_clicked(move |_| {
-                    if let Some(controller) = weak.upgrade() {
-                        controller.move_tool(category, tool, 1);
-                    }
-                });
-            }
-            self.tool_lists.append(&group);
+            let weak = Rc::downgrade(controller);
+            down.connect_clicked(move |_| {
+                if let Some(controller) = weak.upgrade() {
+                    controller.move_tool(category, tool, 1);
+                }
+            });
         }
     }
+}
+
+fn selected_category(dropdown: &gtk::DropDown) -> Category {
+    Category::ALL
+        .get(dropdown.selected() as usize)
+        .copied()
+        .unwrap_or(Category::Images)
+}
+
+/// A page body: fixed reading width, generous margins, and a heading. Pages
+/// live inside their own scroller so long lists never push the sidebar.
+fn page_content(title: &str, subtitle: &str) -> gtk::Box {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    content.set_margin_top(24);
+    content.set_margin_bottom(24);
+    content.set_margin_start(28);
+    content.set_margin_end(28);
+    content.set_halign(gtk::Align::Center);
+    content.set_width_request(560);
+
+    let heading = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    let title = gtk::Label::new(Some(title));
+    title.add_css_class("rd-page-title");
+    title.set_halign(gtk::Align::Start);
+    let subtitle = gtk::Label::new(Some(subtitle));
+    subtitle.add_css_class("rd-page-subtitle");
+    subtitle.set_halign(gtk::Align::Start);
+    subtitle.set_wrap(true);
+    subtitle.set_xalign(0.0);
+    heading.append(&title);
+    heading.append(&subtitle);
+    heading.set_margin_bottom(4);
+    content.append(&heading);
+    content
+}
+
+fn page_scroller(content: &gtk::Box) -> gtk::ScrolledWindow {
+    gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(content)
+        .build()
 }
 
 fn setting_title(text: &str) -> gtk::Label {

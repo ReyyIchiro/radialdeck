@@ -65,6 +65,60 @@ window.rd-dialog {
     padding: 12px;
     background: alpha(currentColor, 0.04);
 }
+
+/* Settings sidebar */
+.rd-sidebar-pane {
+    background: alpha(currentColor, 0.035);
+}
+.rd-sidebar {
+    background: transparent;
+}
+.rd-sidebar row {
+    border-radius: 8px;
+    min-height: 30px;
+    margin: 1px 0;
+}
+.rd-sidebar row:hover {
+    background: alpha(currentColor, 0.06);
+}
+.rd-sidebar row:selected {
+    background: alpha(currentColor, 0.12);
+    /* Adwaita paints selected rows with the accent's foreground colour, which
+       is white; the translucent pill above needs the normal text colour. */
+    color: @theme_fg_color;
+}
+.rd-sidebar-icon {
+    opacity: 0.7;
+}
+.rd-sidebar-app {
+    font-weight: 700;
+    font-size: 14px;
+}
+.rd-sidebar-sub {
+    opacity: 0.55;
+    font-size: 11px;
+}
+.rd-sidebar-version {
+    font-size: 10px;
+    opacity: 0.45;
+}
+.rd-page-title {
+    font-size: 21px;
+    font-weight: 700;
+}
+.rd-page-subtitle {
+    opacity: 0.62;
+    font-size: 12px;
+}
+.rd-tool-row {
+    padding: 3px 4px;
+}
+.rd-tool-index {
+    font-family: monospace;
+    font-size: 11px;
+    opacity: 0.45;
+    min-width: 18px;
+}
 .rd-color-selected {
     border: 2px solid currentColor;
     border-radius: 8px;
