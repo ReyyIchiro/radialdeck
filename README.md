@@ -330,12 +330,14 @@ framebuffer offscreen. Layar, pointer, dan fokus keyboard Anda tidak tersentuh.
 
 ```bash
 cargo build --release
-scripts/ui-smoke.sh          # 30 pemeriksaan, exit 1 bila ada yang gagal
+scripts/ui-smoke.sh          # 40 pemeriksaan, exit 1 bila ada yang gagal
 ```
 
-Lima lane yang diuji: **wayland** (overlay benar-benar ter-map dan tergambar, dibuktikan
+Enam lane yang diuji: **wayland** (overlay benar-benar ter-map dan tergambar, dibuktikan
 screenshot), **x11** (form tool, Float shelf, `Esc`, live-modifier, lewat Xwayland
-bersarang), **settings**, dan **CLI batch** (tanpa GTK sama sekali).
+bersarang), **settings** (Down menelusuri keenam halaman, tiap halaman difoto),
+**projects** (daftar folder dari config yang di-seed), **dark** (tema gelap benar-benar
+menggelapkan jendela), dan **CLI batch** (tanpa GTK sama sekali).
 Butuh `kwin_wayland`, `spectacle`, `xdotool`, dan `magick`. Screenshot serta log tersimpan
 di `/tmp/radial-deck-ui-smoke` (ubah dengan `RADIAL_DECK_SMOKE_OUT`).
 
@@ -379,7 +381,7 @@ tanpa menggantung pipe pemanggilnya.
 | Urutan tool kustom per kategori | ✅ unit test; daftar kosong menyembunyikan semua tool |
 | Riwayat + Undo | ✅ entri tersimpan, Undo menghapus output dan memperbarui tray |
 | CLI batch `convert` | ✅ exit 0/2, nama bentrok `-1`, tanpa inisialisasi GTK (jalan di SSH) |
-| `scripts/ui-smoke.sh` (sesi KWin virtual) | ✅ 30/30 lulus tanpa menyentuh layar nyata |
+| `scripts/ui-smoke.sh` (sesi KWin virtual) | ✅ 40/40 lulus tanpa menyentuh layar nyata |
 | Portal tanpa `GlobalShortcuts` saat login | ✅ retry backoff + drop-in systemd, hotkey pulih sendiri |
 | Binary release | 6.9 MiB (stripped) |
 
