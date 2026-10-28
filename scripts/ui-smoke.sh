@@ -16,6 +16,8 @@
 #   wayland  - layer-shell overlay actually maps and draws (screenshot proof)
 #   x11      - keyboard-driven flows: tool form submission, Float, Esc
 #   settings - the normal toplevel still maps in the nested session
+#   projects - the Projects page lists the folders of the active project
+#   dark     - the same window under the dark preference
 #   cli      - `radial-deck convert` runs without any display
 #
 # Usage: scripts/ui-smoke.sh
@@ -333,7 +335,77 @@ check "wayland: settings process stays alive" app_alive
 check "wayland: settings log has no panic" \
     bash -c "! grep -qE 'panicked|SIGABRT' '$APP_LOG'"
 
-# --- lane 5: headless batch converter --------------------------------------
+# The sidebar is keyboard-driven: the window focuses the page list on open, so
+# Down moves the selection and switches pages without depending on pixels.
+start_app x11 --settings
+check "x11: settings window is mapped" x11_focus
+sleep 1
+shoot settings-general
+for page in shortcuts projects tools output advanced; do
+    send_key Down
+    sleep 1
+    shoot "settings-$page"
+done
+# Every Down press must land on a different page: comparing consecutive
+# captures catches a stuck selection, which a single diff would not.
+check "x11: Down walks every settings page" \
+    bash -c "prev=general
+    for page in shortcuts projects tools output advanced; do
+        compare -metric AE \"$OUT/shots/settings-\$prev.png\" \"$OUT/shots/settings-\$page.png\" null: 2>&1 | grep -qx '0' && exit 1
+        prev=\$page
+    done; exit 0"
+check "x11: settings survives page navigation" app_alive
+check "x11: no panic after page navigation" \
+    bash -c "! grep -qE 'panicked|SIGABRT' '$APP_LOG'"
+
+# --- lane 5: seeded project list --------------------------------------------
+# The Projects page must show folders, not just counts. Seeding goes through
+# the config file because the Manage window's dialogs need a real portal.
+mkdir -p "$OUT/work/docs" "$OUT/work/assets"
+python3 - "$XDG_CONFIG_HOME/radial-deck/config.json" "$OUT/work" <<'PY'
+import json, sys, uuid
+path, work = sys.argv[1], sys.argv[2]
+with open(path) as handle:
+    config = json.load(handle)
+project = config["projects"][0]
+project["folders"] = [
+    {"id": str(uuid.uuid4()), "label": label, "path": f"{work}/{name}", "color": None}
+    for label, name in (("Documents", "docs"), ("Assets", "assets"))
+]
+with open(path, "w") as handle:
+    json.dump(config, handle, indent=2)
+PY
+start_app x11 --settings
+check "x11: seeded settings window is mapped" x11_focus
+sleep 1
+send_key Down
+sleep 0.5
+send_key Down                 # General -> Shortcuts -> Projects
+sleep 1
+shoot settings-projects-seeded
+# Two conditions: the window really is on Projects (not the start page), and
+# the seeded folders changed what that page draws.
+check "x11: seeded project list is on the Projects page" \
+    bash -c "! compare -metric AE '$OUT/shots/settings-general.png' '$OUT/shots/settings-projects-seeded.png' null: 2>&1 | grep -qx '0'"
+check "x11: project list renders its folders" \
+    bash -c "! compare -metric AE '$OUT/shots/settings-projects.png' '$OUT/shots/settings-projects-seeded.png' null: 2>&1 | grep -qx '0'"
+
+# --- lane 6: dark theme -----------------------------------------------------
+# The settings CSS mixes theme colours (@theme_fg_color) with translucent
+# overlays, so both variants must resolve; a light-only check would miss a
+# white-on-white regression.
+sed -i 's/"theme": "system"/"theme": "dark"/' "$XDG_CONFIG_HOME/radial-deck/config.json"
+start_app x11 --settings
+check "x11: dark settings window is mapped" x11_focus
+sleep 1
+shoot settings-dark
+check "x11: dark preference darkens the window" \
+    bash -c "[[ \$(magick '$OUT/shots/settings-dark.png' -colorspace gray -format '%[fx:mean]' info:) < \$(magick '$OUT/shots/settings-general.png' -colorspace gray -format '%[fx:mean]' info:) ]]"
+check "x11: no panic in dark theme" \
+    bash -c "! grep -qE 'panicked|SIGABRT' '$APP_LOG'"
+sed -i 's/"theme": "dark"/"theme": "system"/' "$XDG_CONFIG_HOME/radial-deck/config.json"
+
+# --- lane 7: headless batch converter --------------------------------------
 # The CLI path must not need GTK at all: it runs here with the same private
 # environment but is a separate process, so a GTK init regression would hang
 # or fail the exit status.

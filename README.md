@@ -116,7 +116,7 @@ install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 | `radial-deck --projects` | Buka roda folder proyek |
 | `radial-deck --hidden` | Mulai tersembunyi di tray (autostart) |
 | `radial-deck --manage` | Jendela manajemen folder proyek |
-| `radial-deck --settings` | Pengaturan hotkey, autostart, tema, output, urutan tool |
+| `radial-deck --settings` | Jendela pengaturan bersidebar: hotkey, tema, output, tool, log |
 | `radial-deck --reset-config` | Hapus konfigurasi dan mulai ulang |
 | `radial-deck convert --to webp FILES…` | Konversi batch headless, cetak path hasil |
 | `radial-deck --version` / `--help` | Versi / bantuan |
@@ -161,8 +161,7 @@ file lama tidak pernah ikut terhapus. Riwayat disimpan terpisah di
 `$XDG_STATE_HOME/radial-deck/history.json` (maksimal 30 entri, tidak mengotori config).
 
 Default output adalah **folder yang sama** dengan file asli dan nama bentrok tidak pernah
-ditimpa (`foto.webp`, `foto-1.webp`, …). Lokasi output bisa diubah di **Settings → Output
-location** menjadi subfolder (default `RadialDeck`) atau satu folder tetap.
+ditimpa (`foto.webp`, `foto-1.webp`, …). Lokasi output bisa diubah di **Settings → Output** menjadi subfolder (default `RadialDeck`) atau satu folder tetap.
 
 ### Format
 
@@ -196,7 +195,7 @@ audio / preset PDF), **Crop**, **Edit** (brightness, contrast, saturation, rotat
 **Snapshots**, **Split Video**, **Mute**, **Normalize Audio**, **Channels**,
 **Audio → Video**, **Extract Archive**.
 
-Urutan tool di roda bisa diatur per kategori lewat **Settings → Wheel tools**: saklar
+Urutan tool di roda bisa diatur per kategori lewat **Settings → Tool wheel**: saklar
 menentukan tool tampil atau tidak, panah menggeser urutannya, dan urutan itu langsung
 menentukan digit `1`–`9` saat roda dibuka. Mematikan semua tool untuk satu kategori
 disengaja dan tidak dikembalikan ke default secara diam-diam.
@@ -257,11 +256,11 @@ Kunci baru di `preferences`:
 | `wheel_tools` | Peta `kategori → [id tool]`; urutan menentukan digit `1`–`9`, daftar kosong menyembunyikan semua |
 
 Di KDE, portal menyimpan binding yang sudah pernah disetujui pengguna. Jika binding lama
-masih `Ctrl+Alt+P`, buka **Settings → Configure Shortcuts** sekali dan pilih `Ctrl+Alt+Q`;
+masih `Ctrl+Alt+P`, buka **Settings → Shortcuts → Change Shortcuts…** sekali dan pilih `Ctrl+Alt+Q`;
 setelah itu binding baru dipakai. Install baru langsung memakai `Ctrl+Alt+Q`. Detail invariant ada di [`docs/architecture.md`](docs/architecture.md).
 
 Log: `$XDG_STATE_HOME/radial-deck/logs/radial-deck.YYYY-MM-DD.log`
-(fallback `~/.local/state/...`), retensi 7 hari. Buka lewat **Settings → Open Logs** atau
+(fallback `~/.local/state/...`), retensi 7 hari. Buka lewat **Settings → Advanced → Open Logs** atau
 set `RUST_LOG=radial_deck=debug` untuk diagnosis.
 
 Renderer default adalah **Cairo** (software) agar memori rendah dan tidak bergantung pada
@@ -298,7 +297,7 @@ crates/
         ├── manage.rs          # CRUD project/folder, warna, urutan
         ├── progress_window.rs # panel progres layer-shell tanpa fokus + Cancel
         ├── batch.rs           # subcommand `convert` headless
-        ├── settings.rs        # shortcut, autostart, tema, output, urutan tool, log
+        ├── settings.rs        # sidebar 6 halaman: shortcut, tema, output, tool, log
         ├── hotkey.rs          # GlobalShortcuts portal (dua binding)
         ├── tray.rs            # StatusNotifierItem
         ├── logging.rs         # log harian XDG
@@ -434,7 +433,7 @@ systemctl --user restart xdg-desktop-portal
 ```
 
 Kalau `GlobalShortcuts` **ada** tetapi tetap tidak ada reaksi, cek apakah binding pernah
-ditolak: buka Settings → *Change Shortcuts…* lalu set ulang. KDE menyimpan binding yang
+ditolak: buka Settings → **Shortcuts** → *Change Shortcuts…* lalu set ulang. KDE menyimpan binding yang
 ditolak tanpa trigger, sehingga `BindShortcuts` sukses tetapi tidak ada tombol yang
 dipegang.
 

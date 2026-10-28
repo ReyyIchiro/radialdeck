@@ -262,7 +262,7 @@ crates/radial-deck/src/
 ├── project_tabs.rs      # tab project, overflow +N, sinkronisasi state
 ├── widgets.rs           # tombol ikon, klaster warna, helper aksesibilitas
 ├── manage.rs            # CRUD project/folder, file chooser, drag & drop
-├── settings.rs          # shortcut, autostart, terminal, tema, path log
+├── settings.rs          # sidebar 6 halaman: general/shortcut/project/tool/output/advanced
 ├── hotkey.rs            # GlobalShortcuts portal, dua binding (tokio)
 ├── logging.rs           # log harian di XDG_STATE_HOME, retensi 7 file
 ├── tray.rs              # StatusNotifierItem (ksni)

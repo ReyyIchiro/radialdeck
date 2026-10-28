@@ -65,7 +65,7 @@ global didaftarkan melalui XDG GlobalShortcuts portal.
 | Riwayat + Undo | rekaman tersimpan; Undo menghapus output dan menyegarkan tray |
 | CLI `convert` | exit 0/2, `--into`, nama bentrok `-1`, `--help`; tidak menginisialisasi GTK, jalan tanpa display |
 | Mode Actions: Copy Path | clipboard berisi path absolut |
-| `scripts/ui-smoke.sh` (KWin virtual, layar nyata tidak tersentuh) | 30/30: overlay Wayland ter-map & tergambar, form Compress menulis file, Float shelf 340×420, `Esc` menutup, live-modifier, settings, CLI batch; artefak per-lane `app-N.log` |
+| `scripts/ui-smoke.sh` (KWin virtual, layar nyata tidak tersentuh) | 40/40: overlay Wayland ter-map & tergambar, form Compress menulis file, Float shelf 340×420, `Esc` menutup, live-modifier, navigasi 6 halaman Settings (termasuk daftar folder proyek dan tema gelap), CLI batch; artefak per-lane `app-N.log` |
 | `ui-smoke.sh` isolasi bus | bus D-Bus privat; 0 proses tersisa, keluar 25 detik tanpa menggantung pipe |
 | Idle CPU (release, hidden) | 0,5% setelah 20 detik |
 | Mode Actions: Float | shelf 340×420, baris `photo.png`, tombol tutup per baris |
@@ -100,7 +100,8 @@ tidak ada perubahan pada `deck-core::convert`.
   disembunyikan dan dipakai ulang.
 - Manage: rename folder, warna folder/project, buka/terminal/salin path, konfirmasi hapus,
   empty state, reorder; delete project dinonaktifkan saat hanya satu project.
-- Settings: dua shortcut, pintasan ke Manage, path log + tombol buka log.
+- Settings: sidebar 6 halaman (General, Shortcuts, Projects, Tool wheel, Output, Advanced),
+  daftar folder per proyek, dua shortcut, pintasan ke Manage, path log + tombol buka log.
 - Log harian di `$XDG_STATE_HOME/radial-deck/logs`, retensi 7 file.
 - Config schema 3: migrasi aditif `projects_hotkey`, default project pindah ke
   `CTRL+ALT+Q`, lalu duplikat shortcut diperbaiki.
