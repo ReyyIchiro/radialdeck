@@ -2,12 +2,14 @@ mod action_launcher;
 mod action_wheel;
 mod actions;
 mod autostart;
+mod batch;
 mod controller;
 mod float_shelf;
 mod hotkey;
 mod launcher;
 mod logging;
 mod manage;
+mod progress_window;
 mod project_tabs;
 mod settings;
 mod surface;
@@ -33,6 +35,7 @@ OPTIONS:
     --manage          Open the folder management window
     --settings        Open the settings window
     --reset-config    Delete the saved configuration, then start with defaults
+    convert           Headless batch conversion; see `radial-deck convert -h`
     -V, --version     Print version and exit
     -h, --help        Print this help and exit
 
@@ -49,6 +52,18 @@ fn main() -> gtk::glib::ExitCode {
     // renderer and avoids relying on the Optimus GPU. Users can override it.
     if std::env::var_os("GSK_RENDERER").is_none() {
         std::env::set_var("GSK_RENDERER", "cairo");
+    }
+
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    if batch::is_invocation(&raw_args) {
+        return match batch::BatchArgs::parse(batch::strip_invocation(&raw_args)) {
+            Ok(args) => batch::run(args),
+            Err(message) => {
+                eprintln!("radial-deck convert: {message}");
+                eprintln!("Try `radial-deck convert --help`.");
+                gtk::glib::ExitCode::from(2)
+            }
+        };
     }
 
     let _log_guard = logging::init();
