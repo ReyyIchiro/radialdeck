@@ -87,34 +87,40 @@ kanan file di Dolphin untuk langsung membuka roda konversi.
 
 ## Instalasi
 
-### Cepat (user-local, tanpa sudo)
+### Build dari sumber (cara utama saat ini)
 
 ```bash
 git clone https://github.com/ReyyIchiro/radialdeck.git
-cd radial-deck
+cd radialdeck
 ./scripts/install.sh
 ```
 
-Pemasangan di atas membuat binary ke `~/.local/bin/radial-deck`, desktop entry, ikon, dan service menu Dolphin. Jalankan `radial-deck --hidden` sekali, lalu setujui dialog *Global Shortcuts* KDE. Aktifkan **Launch at login** di Settings supaya hotkey tetap ada setelah reboot; kalau hotkey diam saja, jalankan `./scripts/doctor.sh`.
+Skrip memasang binary release ke `~/.local/bin/radial-deck`, desktop entry, ikon, dan
+service menu Dolphin. Jalankan `radial-deck --hidden` sekali, lalu setujui dialog
+*Global Shortcuts* KDE. Aktifkan **Launch at login** di Settings supaya hotkey tetap ada
+setelah reboot. Kalau hotkey diam saja, jalankan `./scripts/doctor.sh`.
 
-### Arch / CachyOS (AUR)
-
-```bash
-cd packaging/aur
-makepkg -si
-```
-
-Paket mencakup dependensi wajib aplikasi; konverter opsional tetap dipasang sesuai kebutuhan pengguna melalui pengaturan aplikasi.
-
-### Build manual
+Paket sistem yang dibutuhkan sebelum build (Arch/CachyOS):
 
 ```bash
-# Arch / CachyOS
 sudo pacman -S gtk4 gtk4-layer-shell xdg-desktop-portal rust
-
-cargo build --release --locked
-install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 ```
+
+### AUR (coming soon)
+
+Paket AUR `radial-deck` sedang dipersiapkan. Pendaftaran akun AUR sedang ditutup
+sementara oleh Arch ([aur.archlinux.org](https://aur.archlinux.org/), "New account
+registration is temporarily closed"), jadi paket belum bisa di-publish. Begitu akun
+maintainer aktif, `paru -S radial-deck` dan `yay -S radial-deck` akan tersedia.
+
+Pemilik proyek yang ingin menyiapkan publish: lihat
+[`docs/releasing.md`](docs/releasing.md).
+
+### Flatpak
+
+Manifest ada di `packaging/flatpak/`, tapi masih WIP (sandbox belum bisa memakai binary
+host seperti `ffmpeg`). Belum direkomendasikan untuk pengguna biasa.
+
 
 ---
 

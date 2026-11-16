@@ -71,7 +71,10 @@ perubahan konverter, lakukan satu konversi nyata dan periksa berkas hasil.
 Push ke AUR butuh akun aur.archlinux.org dan SSH key. Tanpa itu, langkah 7
 di atas akan gagal dengan `Permission denied (publickey)`.
 
-1. Buat akun di <https://aur.archlinux.org/register/> (butuh email aktif).
+1. Buat akun di <https://aur.archlinux.org/register/> (butuh email aktif). Saat ini
+   pendaftaran ditutup sementara oleh Arch; pantau
+   [aur-general](https://lists.archlinux.org/listinfo/aur-general) untuk pengumuman
+   pembukaan.
 2. Buat SSH key khusus AUR: `ssh-keygen -t ed25519 -f ~/.ssh/aur`.
 3. Tempel isi `~/.ssh/aur.pub` ke profil AUR → *My Account → SSH Public Keys*.
 4. Tambahkan blok di `~/.ssh/config`:

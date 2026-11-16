@@ -1,67 +1,63 @@
 # Menginstal RadialDeck
 
-Dokumen ini adalah panduan pemasangan untuk pengguna. Pengembang dapat melihat `CONTRIBUTING.md` dan `docs/releasing.md`.
+Panduan pemasangan untuk pengguna. Pengembang: lihat `CONTRIBUTING.md` dan `docs/releasing.md`.
 
-## Metode yang direkomendasikan: AUR (Arch/CachyOS)
-
-RadialDeck tersedia melalui AUR. Paket ini mencakup dependensi wajib aplikasi, desktop entry, ikon, dan *service menu* Dolphin.
+## Build dari sumber (cara utama saat ini)
 
 ```bash
-# Contoh dengan yay
-yay -S radial-deck
-# Atau dengan paru
-paru -S radial-deck
-```
+sudo pacman -S gtk4 gtk4-layer-shell xdg-desktop-portal rust  # Arch/CachyOS
 
-Instalasi paket wajib menampilkan `gtk4`, `gtk4-layer-shell`, `xdg-desktop-portal`, dan `xdg-utils`.
-
-Konverter eksternal opsional (FFmpeg, ImageMagick, Poppler, Ghostscript, LibreOffice, Pandoc, 7-Zip, KDE Connect) tidak dipasang secara otomatis. Pemasang akan menandai fitur terkait tidak tersedia; instal paket yang dibutuhkan lalu tekan **Recheck** di pengaturan aplikasi.
-
-## Build dari sumber
-
-Jika AUR tidak tersedia atau Anda ingin build sendiri:
-
-```bash
 git clone https://github.com/ReyyIchiro/radialdeck.git
 cd radialdeck
 ./scripts/install.sh
 ```
 
-Pemasang ini membuat binary release dan meletakkannya di `~/.local/bin/radial-deck`, junto dengan desktop entry dan ikon. Jalankan `radial-deck --hidden` sekali, lalu setujui *Global Shortcuts* di KDE Portal agar hotkey aktif.
+Skrip memasang binary release ke `~/.local/bin/radial-deck`, bersama desktop entry, ikon, dan service menu Dolphin. Jalankan `radial-deck --hidden` sekali, lalu setujui *Global Shortcuts* di KDE Portal agar hotkey aktif. Aktifkan *Launch at login* di Settings supaya hotkey tetap hidup setelah reboot.
+
+Untuk distribusi non-Arch, ganti langkah `pacman` dengan padanannya (`apt install libgtk-4-dev libgtk-4-layer-shell-dev xdg-desktop-portal rust` di Debian/Ubuntu, `dnf install ...` di Fedora).
+
+## AUR (coming soon)
+
+Paket AUR `radial-deck` sedang dipersiapkan. Pendaftaran akun AUR ditutup sementara oleh Arch ([aur.archlinux.org](https://aur.archlinux.org/), "New account registration is temporarily closed"), jadi paket belum bisa di-publish. Begitu akun maintainer aktif, `paru -S radial-deck` dan `yay -S radial-deck` akan tersedia.
+
+Pemilik proyek yang ingin menyiapkan publish: lihat `docs/releasing.md`.
+
+## Flatpak (WIP)
+
+Manifest ada di `packaging/flatpak/`, tapi sandbox belum bisa memakai binary host seperti `ffmpeg`. Belum direkomendasikan untuk pengguna biasa.
 
 ## Konverter opsional
 
-Fitur radial menyesuaikan diri dengan alat yang terpasang di sistem:
+Fitur roda menyesuaikan diri dengan alat yang terpasang di sistem:
 
 | Kategori | Paket opsi | Efek jika tidak terpasang |
 |---|---|---|
 | Gambar | `imagemagick` | Beberapa output gambar ditandai tidak tersedia |
 | Video/Audio | `ffmpeg` | Konverter video dan audio tidak tersedia |
-| PDF | `poppler`, `ghostscript` | Konversi PDF dan kompressi PDF terbatas |
-| Dokumen | `libreoffice-fresh`, `pandoc` | Konversi dokumen dan slides terbatas |
-| Arsip | `7zip` | Ekstraksi arsip non-native tidak tersedia |
+| PDF | `poppler`, `ghostscript` | Konversi dan kompresi PDF terbatas |
+| Dokumen | `libreoffice-fresh`, `pandoc` | Konversi dokumen dan slide terbatas |
+| Arsip | `7zip` | Ekstraksi arsip non-native (7z/rar) tidak tersedia |
 | Kirim | `kdeconnect` | Aksi *Send* ditandai tidak tersedia |
+
+Instal paket yang dibutuhkan lewat package manager sistem, lalu tekan **Recheck** di *Settings → Dependencies*. RadialDeck tidak pernah menjalankan package manager atau `sudo` sendiri.
 
 Semua konverter dipanggil sebagai proses terpisah tanpa shell; nama berkas dan parameter pengguna tidak pernah masuk ke baris perintah mentah. Semua output ditulis dengan nama unik sehingga berkas lama tidak pernah ditimpa.
 
-## Perbarui dan hapas
+## Perbarui dan hapus
 
-- AUR: perbarui paket seperti biasa (`yay -Syu radial-deck` atau `paru -Syu radial-deck`).
 - Sumber: tarik ulang, build ulang, dan jalankan `./scripts/install.sh` lagi.
-- Hapas: jalankan `./scripts/uninstall.sh` dari direktori sumber yang digunakan saat pemasangan.
+- Hapus: jalankan `./scripts/uninstall.sh` dari direktori sumber yang dipakai saat pemasangan.
+- AUR (begitu tersedia): `yay -Syu radial-deck` atau `paru -Syu radial-deck`.
 
 ## Hotkey tidak aktif?
 
-Aplikasi harus berjalan untuk memegang hotkey global. Aktifkan *Launch at login* di pengaturan aplikasi, atau pastikan berkas *autostart* ada. Jika masih tidak aktif, jalankan `./scripts/doctor.sh` atau periksa *Settings → Shortcuts → Change Shortcuts…* di KDE.
-
+Aplikasi harus berjalan untuk memegang hotkey global. Aktifkan *Launch at login* di pengaturan aplikasi, atau pastikan berkas `~/.config/autostart/io.github.raihan.RadialDeck.desktop` ada. Jika masih tidak aktif, jalankan `./scripts/doctor.sh` atau periksa *Settings → Shortcuts → Change Shortcuts...* di KDE.
 
 ## Menjadi maintainer AUR (sekali saja)
 
-Panduan untuk pemilik proyek. Hanya diperlukan saat pertama kali
-memublikasikan paket atau memindah kepemilikan.
+Panduan untuk pemilik proyek. Hanya diperlukan saat pertama kali memublikasikan paket atau memindah kepemilikan.
 
-1. Buat akun di [aur.archlinux.org/register](https://aur.archlinux.org/register/)
-   (butuh email aktif untuk verifikasi).
+1. Buat akun di [aur.archlinux.org/register](https://aur.archlinux.org/register/) (butuh email aktif untuk verifikasi). Saat ini pendaftaran ditutup sementara; pantau [aur-general](https://lists.archlinux.org/listinfo/aur-general) untuk pengumuman pembukaan.
 2. Buat SSH key khusus AUR:
    ```bash
    ssh-keygen -t ed25519 -f ~/.ssh/aur -C "aur-$(whoami)"
@@ -75,8 +71,7 @@ memublikasikan paket atau memindah kepemilikan.
    ```
 5. Uji koneksi: `ssh aur@aur.archlinux.org help`.
 
-Setelah akun aktif, buat repositori paket lokal dan dorong `PKGBUILD` +
-`.SRCINFO` dari `packaging/aur/`. Rinciannya ada di `docs/releasing.md`.
+Setelah akun aktif, buat repositori paket lokal dan dorong `PKGBUILD` + `.SRCINFO` dari `packaging/aur/`. Rinciannya ada di `docs/releasing.md`.
 
 ## Hak cipta
 
