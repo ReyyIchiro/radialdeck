@@ -24,6 +24,11 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config
       - uses: actions/checkout@v4
 
+      - name: Trust checkout directory for git
+        # Container runs as a different UID than the runner that wrote the
+        # checkout, so git refuses `describe`/`archive` without this.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
