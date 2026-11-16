@@ -90,13 +90,19 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
 - `convert::registry::targets()` menghasilkan daftar target tetap per kategori. Setiap
   target membawa `reason` bila tidak tersedia; UI menampilkannya sebagai wedge redup,
   strikethrough, tooltip, dan status saat diklik.
-- Tool eksternal dideteksi sekali saat startup dengan memindai `PATH` plus fallback
-  `/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin` (desktop launch sering
-  tidak memasukkan sbin, padahal Arch menaruh `ffmpeg`/`magick`/`soffice` di sana).
+- Tool eksternal diselesaikan lewat `find_tool` yang di-cache per proses (pindai `PATH`
+  plus fallback `/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin`, karena
+  desktop launch sering tidak memasukkan sbin, padahal Arch menaruh
+  `ffmpeg`/`magick`/`soffice` di sana). `registry::refresh_tool_cache()` membatalkan
+  cache; Settings, Recheck memanggilnya, jadi program yang baru dipasang terdeteksi
+  tanpa restart.
 - Klik target yang tersedia: panel langsung disembunyikan, sumber difilter sesuai kategori,
   lalu `std::thread` menjalankan batch. Hasil dikirim balik lewat `async_channel` dan
   diproses di main context (`glib::spawn_future_local`) supaya tidak ada mutasi UI dari
   thread lain. Satu konversi pada satu waktu (`converting` flag).
+- Probe perangkat KDE Connect juga tidak pernah berjalan di thread utama: roda Actions
+  dirender dengan daftar cache, lalu thread probe mengirim hasilnya balik lewat channel
+  dan roda di-refresh ketika jawaban tiba.
 - Output ditulis di direktori sumber; nama yang sudah ada tidak ditimpa (error dilaporkan).
 - Dismiss: `Escape` dan klik di luar `panel.compute_bounds()` dikirim sebagai
   `ActionRequest::Dismiss` ke controller; klik di dalam wedge tidak menutup panel.
@@ -147,7 +153,12 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
 - `launcher.rs` membuat layer-shell overlay; `project_tabs.rs` merender rail dan
   `wheel.rs` menggambar serta melakukan hit-test.
 - `WheelData` membawa project aktif, semua project (untuk dot warna), folder terfilter,
-  query, dan flag fokus rail. Filter dihitung di `deck-core::search` (fuzzy).
+  query, flag fokus rail, dan banner mode picker. Aksi **To Project** dari roda
+  Actions men-staging file lalu membuka roda ini sebagai picker: folder yang
+  dipilih menjadi tujuan `move_async`; `hide_launcher` membersihkan staging
+  sehingga Esc/klik luar/hotkey lain selalu membatalkan dengan rapi. Filter memakai ranking bersama
+  `deck_core::search::match_rank` (label diawali query, label mengandung, path
+  mengandung), jadi query juga menemukan folder dari lokasinya.
 - Layout adaptif:
   - 0 folder / tidak ada hasil → empty state dengan CTA **Manage folders**.
   - 1 folder → satu target cincin penuh; pusat membuka folder, badge alasan tampil bila
@@ -223,14 +234,30 @@ Jika portal tidak tersedia, Settings menampilkan error yang dapat ditindaklanjut
 - Event-driven: tidak ada polling. Hotkey/tray menunggu sinyal D-Bus; UI hanya redraw saat
   interaksi.
 - Overlay dibuat lazy saat pertama dipakai; idle hanya tray + hotkey + GTK loop.
-- Konversi berjalan di thread terpisah; UI tidak memblokir dan progres tidak memicu polling.
+- Konversi dan tool berjalan di thread terpisah; UI task menerima `WorkerEvent`
+  (progres + hasil) dari satu `async_channel` yang di-`await`, jadi tidak ada loop
+  polling dan tidak ada kerja CPU di antara event progres.
+- Probe KDE Connect tidak pernah di thread utama; roda Actions dirender dulu, hasil
+  probe mem-patch target Send saat tiba.
+- Notifikasi desktop dilayani satu thread worker bernama `notifications` yang dibuat
+  sekali per proses.
+- `find_tool` di-cache per proses; render roda Tools dan konversi tidak lagi memindai
+  `PATH` berulang-ulang.
 - `GSK_RENDERER=cairo` dipaksa sebelum GTK init (kecuali user meng-override). Ini
   mengurangi RSS window pertama dari ~115 MB ke ~68 MB dan tidak membutuhkan GPU.
 - Wheel digambar dengan Cairo (CPU) hanya saat tampil/berubah.
 - Window manage/settings dihancurkan saat ditutup, bukan disembunyikan, agar widget tree
-  dilepas. Overlay roda tetap dipakai ulang setelah dismiss.
+  dilepas. Overlay roda tetap dipakai ulang setelah dismiss; Float shelf dihancurkan
+  saat tombol close (dibangun ulang saat dipakai lagi).
+- Output selalu ditulis lewat `create_exclusive` sehingga operasi serentak tidak bisa
+  saling menimpa; `history.json` dan `config.json` ditulis atomik dengan mode 0600.
+- `scripts/bench.sh` menjaga jalur panas: ukuran binary, best-of-N latensi
+  `--version` dan `convert --list`, serta throughput konversi, dibandingkan
+  terhadap `scripts/bench-baseline.json` (gagal bila regresi >25%).
+- Aksen dibaca sekali per proses dari `AccentColor` kdeglobals; varian
+  kontrasnya (teks, fill bar) dihitung, bukan ditetapkan manual.
 - Release idle (hidden, setelah startup): ~53 MB RSS. Setelah window pertama: ~68–87 MB
-  RSS. Binary 6.5 MiB (stripped). Diukur pada 2026-10-23, KDE Wayland.
+  RSS. Binary 6.9 MiB (stripped). Diukur pada 2026-11-16, KDE Wayland.
 - Tidak ada polling; hotkey/tray menunggu D-Bus, UI hanya redraw saat interaksi.
 
 ## Struktur kode Linux
@@ -250,7 +277,7 @@ crates/deck-core/src/
 └── file_actions.rs      # copy/move/trash tanpa shell (dipakai mode Actions)
 
 crates/radial-deck/src/
-├── main.rs              # GtkApplication, single instance, CLI
+├── main.rs              # GtkApplication, single instance, CLI, panic hook, logging
 ├── controller.rs        # state + semua mutasi + jembatan UI + worker konversi
 ├── action_launcher.rs   # overlay panel konversi, tab, mode, form, drag & drop
 ├── action_wheel.rs      # roda konversi Cairo, hit-test, keyboard, hover

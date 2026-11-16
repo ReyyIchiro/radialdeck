@@ -13,6 +13,7 @@ use deck_core::{OutputLocation, Tools};
 pub const HELP: &str = "\
 USAGE:
     radial-deck convert --to <FORMAT> [--into <DIR> | --subfolder <NAME>] FILES…
+       or: radial-deck convert --list [FILES…]
 
 Converts files with the same engine as the wheel. Outputs never overwrite an
 existing file; a numeric suffix is added instead.
@@ -21,6 +22,8 @@ OPTIONS:
     --to <FORMAT>        Target extension, e.g. webp, mp4, pdf
     --into <DIR>         Write everything into this folder
     --subfolder <NAME>   Write into <source folder>/<NAME>
+    --list               Print targets that are currently available, for the
+                         files' category (or every category without files)
     --quiet              Only print errors
     -h, --help           Show this help
 ";
@@ -30,6 +33,7 @@ pub struct BatchArgs {
     pub target: Option<String>,
     pub into: Option<PathBuf>,
     pub subfolder: Option<String>,
+    pub list: bool,
     pub quiet: bool,
     pub help: bool,
     pub files: Vec<PathBuf>,
@@ -67,6 +71,7 @@ impl BatchArgs {
                     parsed.subfolder = Some(other["--subfolder=".len()..].to_owned());
                 }
                 "--quiet" | "-q" => parsed.quiet = true,
+                "--list" | "-l" => parsed.list = true,
                 "--help" | "-h" => parsed.help = true,
                 other if other.starts_with('-') => {
                     return Err(format!("unknown option: {other}"));
@@ -74,7 +79,7 @@ impl BatchArgs {
                 file => parsed.files.push(PathBuf::from(file)),
             }
         }
-        if !parsed.help {
+        if !parsed.help && !parsed.list {
             if parsed.target.is_none() {
                 return Err("--to is required".into());
             }
@@ -102,8 +107,12 @@ impl BatchArgs {
 /// Returns the process exit code: 0 only when every file converted.
 pub fn run(args: BatchArgs) -> ExitCode {
     if args.help {
-        print!("{HELP}");
+        // Same EPIPE tolerance as print_line: `radial-deck convert --help | head`.
+        let _ = std::io::Write::write_all(&mut std::io::stdout().lock(), HELP.as_bytes());
         return ExitCode::SUCCESS;
+    }
+    if args.list {
+        return print_targets(&args);
     }
     let Some(target) = args.target.clone() else {
         eprintln!("radial-deck: --to is required");
@@ -140,14 +149,17 @@ pub fn run(args: BatchArgs) -> ExitCode {
         &args.files,
         category,
         &target,
-        &Tools::detect(),
         location,
         deck_core::CancelToken::new(),
         std::sync::Arc::new(|_| {}),
     );
     if !args.quiet {
         for path in &outcome.created {
-            println!("{}", path.display());
+            // A closed pipe (`| head`) ends the listing quietly instead of
+            // panicking; the consumer chose to stop reading.
+            if !print_line(&path.to_string_lossy()) {
+                break;
+            }
         }
     }
     for failure in &outcome.failures {
@@ -175,6 +187,49 @@ fn common_category(files: &[PathBuf]) -> Option<Category> {
         }
     }
     category
+}
+
+/// Prints the targets the engine can currently deliver, one category per
+/// line. `--list` with files narrows to their shared category; without files
+/// every category is listed, which doubles as an install-status overview.
+fn print_targets(args: &BatchArgs) -> ExitCode {
+    let tools = Tools::detect();
+    let single = common_category(&args.files);
+    let categories: &[Category] = match &single {
+        Some(category) => std::slice::from_ref(category),
+        None if args.files.is_empty() => &Category::ALL,
+        None => {
+            eprintln!("radial-deck: the inputs must all be the same kind of file");
+            return ExitCode::from(2);
+        }
+    };
+    for category in categories {
+        let source = args.files.first().map(PathBuf::as_path);
+        let targets = registry::targets(*category, source, &tools);
+        let ready: Vec<&str> = targets
+            .iter()
+            // Without a source file only tool availability can be judged.
+            .filter(|target| source.is_some() && target.is_available() || target.tools_ready())
+            .map(|target| target.id.as_str())
+            .collect();
+        let line = if ready.is_empty() {
+            format!("{}: (none available)", category.label())
+        } else {
+            format!("{}: {}", category.label(), ready.join(" "))
+        };
+        if !print_line(&line) {
+            break;
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Prints one line to stdout, reporting whether the consumer is still there.
+/// Rust ignores SIGPIPE, so a closed pipe surfaces as a write error here
+/// instead of killing the process with a panic in `println!`.
+fn print_line(line: &str) -> bool {
+    use std::io::Write;
+    writeln!(std::io::stdout().lock(), "{line}").is_ok()
 }
 
 /// True when the first argument selects the headless converter.
@@ -220,6 +275,14 @@ mod tests {
     fn target_and_inputs_are_required() {
         assert!(parse(&["a.png"]).is_err());
         assert!(parse(&["--to=pdf"]).is_err());
+    }
+
+    #[test]
+    fn list_needs_neither_target_nor_files() {
+        let args = parse(&["--list"]).unwrap();
+        assert!(args.list);
+        assert!(args.target.is_none());
+        assert!(args.files.is_empty());
     }
 
     #[test]

@@ -18,3 +18,4 @@ packaging/flatpak/cargo-sources.json
 
 # Local agent tooling state
 .omp/
+.zcode/

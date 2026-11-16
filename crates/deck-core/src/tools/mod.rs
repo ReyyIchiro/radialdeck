@@ -16,15 +16,48 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::binaries;
 use crate::Category;
 use shell::{parse_seconds, parse_u32, ToolResult};
-
-pub use shell::ToolResult as ToolExecutionResult;
 
 /// Shared by the conversion engine so both halves honour cancellation and
 /// stream child-process output identically.
 pub(crate) fn run_command(command: &mut std::process::Command, label: &str) -> ToolResult<()> {
     shell::run(command, label)
+}
+
+/// Runs `operation` over every source, reporting finished and failed files to
+/// the active job scope. One failure never stops the batch.
+pub(crate) fn each<F>(sources: &[PathBuf], mut operation: F) -> ToolOutcome
+where
+    F: FnMut(&std::path::Path) -> ToolResult<Vec<PathBuf>>,
+{
+    let mut outcome = ToolOutcome::default();
+    crate::job::set_total(sources.len());
+    for source in sources {
+        if crate::job::cancelled() {
+            outcome.failures.push(ToolFailure {
+                source: source.clone(),
+                message: "Cancelled".into(),
+            });
+            crate::job::report_failure(source);
+            break;
+        }
+        match operation(source) {
+            Ok(created) => {
+                outcome.created.extend(created);
+                crate::job::report_file(source);
+            }
+            Err(message) => {
+                outcome.failures.push(ToolFailure {
+                    source: source.clone(),
+                    message,
+                });
+                crate::job::report_failure(source);
+            }
+        }
+    }
+    outcome
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,8 +260,10 @@ impl ToolId {
             | Self::EditImage
             | Self::AnnotateImage
             | Self::FrameImage
-            | Self::RedactImage => &["magick"],
-            Self::MergePdf | Self::SplitPdf | Self::OrganizePdf => &["pdfunite", "pdfseparate"],
+            | Self::RedactImage => &[binaries::IMAGEMAGICK],
+            Self::MergePdf | Self::SplitPdf | Self::OrganizePdf => {
+                &[binaries::PDFUNITE, binaries::PDFSEPARATE]
+            }
             Self::Compress
             | Self::RemoveMetadata
             | Self::TrimVideo
@@ -242,9 +277,9 @@ impl ToolId {
             | Self::TrimAudio
             | Self::AudioChannels
             | Self::AudioToVideo
-            | Self::RedactAudio => &["ffmpeg"],
-            Self::JoinVideos => &["ffmpeg"],
-            Self::ExtractArchive => &["7z"],
+            | Self::RedactAudio => &[binaries::FFMPEG],
+            Self::JoinVideos => &[binaries::FFMPEG],
+            Self::ExtractArchive => &[binaries::SEVENZIP],
         }
     }
 }
@@ -492,8 +527,8 @@ pub fn availability(id: ToolId, category: Category, sources: &[PathBuf]) -> Opti
         });
     }
     let requirements: &[&str] = match (id, category) {
-        (ToolId::Compress | ToolId::RemoveMetadata, Category::Images) => &["magick"],
-        (ToolId::Compress | ToolId::RemoveMetadata, Category::Pdf) => &["gs"],
+        (ToolId::Compress | ToolId::RemoveMetadata, Category::Images) => &[binaries::IMAGEMAGICK],
+        (ToolId::Compress | ToolId::RemoveMetadata, Category::Pdf) => &[binaries::GHOSTSCRIPT],
         (ToolId::ExtractArchive, _) => &[],
         _ => id.requirements(),
     };
@@ -513,7 +548,7 @@ pub fn availability(id: ToolId, category: Category, sources: &[PathBuf]) -> Opti
         ) {
             return Some("Choose a ZIP, TAR, GZ, RAR, or 7Z archive".into());
         }
-        if crate::convert::registry::find_tool("7z").is_none()
+        if crate::convert::registry::find_tool(binaries::SEVENZIP).is_none()
             && crate::convert::registry::find_tool("unrar").is_none()
         {
             return Some("7-Zip or unrar is not installed".into());

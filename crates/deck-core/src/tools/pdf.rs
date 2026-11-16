@@ -9,8 +9,8 @@ use super::shell::{
     create_dir, extension, require, run, source_parent, source_stem, unique_dir, unique_path,
     ToolResult,
 };
-use super::{value, ToolFailure, ToolId, ToolOutcome};
-use crate::convert::{Category, Tools};
+use super::{each, value, ToolFailure, ToolId, ToolOutcome};
+use crate::convert::Category;
 
 pub fn execute(id: ToolId, sources: &[PathBuf], values: &BTreeMap<String, String>) -> ToolOutcome {
     match id {
@@ -29,38 +29,12 @@ pub fn execute(id: ToolId, sources: &[PathBuf], values: &BTreeMap<String, String
     }
 }
 
-fn each<F>(sources: &[PathBuf], mut operation: F) -> ToolOutcome
-where
-    F: FnMut(&Path) -> ToolResult<Vec<PathBuf>>,
-{
-    let mut outcome = ToolOutcome::default();
-    crate::job::set_total(sources.len());
-    for source in sources {
-        if crate::job::cancelled() {
-            outcome.failures.push(ToolFailure {
-                source: source.clone(),
-                message: "Cancelled".into(),
-            });
-            break;
-        }
-        match operation(source) {
-            Ok(created) => outcome.created.extend(created),
-            Err(message) => outcome.failures.push(ToolFailure {
-                source: source.clone(),
-                message,
-            }),
-        }
-        crate::job::report_file(source);
-    }
-    outcome
-}
-
 fn pdfunite() -> ToolResult<PathBuf> {
-    require("pdfunite")
+    require(crate::binaries::PDFUNITE)
 }
 
 fn pdfseparate() -> ToolResult<PathBuf> {
-    require("pdfseparate")
+    require(crate::binaries::PDFSEPARATE)
 }
 
 fn merge(sources: &[PathBuf]) -> ToolOutcome {
@@ -78,7 +52,7 @@ fn merge(sources: &[PathBuf]) -> ToolOutcome {
         command.arg(source);
     }
     command.arg(&destination);
-    match run(&mut command, "pdfunite") {
+    match run(&mut command, crate::binaries::PDFUNITE) {
         Ok(()) => ToolOutcome::success(vec![destination]),
         Err(message) => {
             let _ = fs::remove_file(&destination);
@@ -115,7 +89,7 @@ fn split(source: &Path, values: &BTreeMap<String, String>) -> ToolResult<Vec<Pat
             command.arg(&pages[*page - 1]);
         }
         command.arg(&destination);
-        run(&mut command, "pdfunite")?;
+        run(&mut command, crate::binaries::PDFUNITE)?;
         created.push(destination);
     }
     Ok(created)
@@ -141,7 +115,7 @@ fn organize(source: &Path, values: &BTreeMap<String, String>) -> ToolResult<Vec<
         command.arg(path);
     }
     command.arg(&destination);
-    run(&mut command, "pdfunite")?;
+    run(&mut command, crate::binaries::PDFUNITE)?;
     Ok(vec![destination])
 }
 
@@ -174,12 +148,12 @@ fn clean_metadata(source: &Path) -> ToolResult<Vec<PathBuf>> {
         command.arg(page);
     }
     command.arg(&destination);
-    run(&mut command, "pdfunite")?;
+    run(&mut command, crate::binaries::PDFUNITE)?;
     Ok(vec![destination])
 }
 
 fn ghostscript(source: &Path, destination: &Path, preset: &str) -> ToolResult<()> {
-    let binary = require("gs")?;
+    let binary = require(crate::binaries::GHOSTSCRIPT)?;
     let mut command = Command::new(binary);
     command
         .arg("-sDEVICE=pdfwrite")
@@ -203,7 +177,7 @@ fn separate_pages(source: &Path, directory: &Path) -> ToolResult<Vec<PathBuf>> {
     let pattern = directory.join("page-%d.pdf");
     let mut command = Command::new(pdfseparate()?);
     command.arg(source).arg(&pattern);
-    run(&mut command, "pdfseparate")?;
+    run(&mut command, crate::binaries::PDFSEPARATE)?;
     let mut pages = fs::read_dir(directory)
         .map_err(|error| format!("read {}: {error}", directory.display()))?
         .filter_map(Result::ok)
@@ -297,7 +271,6 @@ pub fn extract_archive(sources: &[PathBuf]) -> ToolOutcome {
                     std::slice::from_ref(source),
                     Category::Archives,
                     "extract",
-                    &Tools::default(),
                 );
                 if result.failures.is_empty() {
                     Ok(result.created)
@@ -327,7 +300,8 @@ pub fn extract_archive(sources: &[PathBuf]) -> ToolOutcome {
 fn extract_with_7z(source: &Path) -> ToolResult<Vec<PathBuf>> {
     let directory = unique_dir(&source_parent(source), &source_stem(source));
     create_dir(&directory)?;
-    let binary = require("7z").or_else(|_| require("7zz"))?;
+    let binary =
+        require(crate::binaries::SEVENZIP).or_else(|_| require(crate::binaries::SEVENZIP_ALT))?;
     let mut command = Command::new(binary);
     command
         .arg("x")

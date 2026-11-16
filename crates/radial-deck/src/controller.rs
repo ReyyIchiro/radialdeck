@@ -22,6 +22,74 @@ use crate::theme;
 use crate::tray::{Tray, TrayCommand};
 use crate::wheel::{Action, Intent, ProjectTab, WheelData, WheelFolder};
 
+/// Events a background worker streams back to the UI task. One channel
+/// replaces the old progress-plus-result pair and removes the 60 ms poll.
+enum WorkerEvent<O> {
+    Progress(deck_core::Progress),
+    Done(O),
+}
+
+/// Runs `worker` on a background thread, streaming its progress into the
+/// progress panel and delivering the outcome to `finish` on the main context.
+/// The UI task awaits the channel instead of polling, so idle work between
+/// progress events is zero.
+fn run_worker<O, W, F>(
+    controller: &Rc<Controller>,
+    title: String,
+    total: usize,
+    worker: W,
+    finish: F,
+    on_dropped: (&'static str, &'static str),
+) where
+    O: Send + 'static,
+    W: FnOnce(deck_core::job::Reporter) -> O + Send + 'static,
+    F: Fn(&Rc<Controller>, O) + 'static,
+{
+    if let Some(window) = controller.ensure_progress_window() {
+        window.show_operation(&title, total);
+    }
+    let (sender, receiver) = async_channel::unbounded();
+    let progress_sender = sender.clone();
+    let reporter: deck_core::job::Reporter = std::sync::Arc::new(move |progress| {
+        let _ = progress_sender.send_blocking(WorkerEvent::Progress(progress));
+    });
+    std::thread::spawn(move || {
+        let outcome = worker(reporter);
+        let _ = sender.send_blocking(WorkerEvent::Done(outcome));
+    });
+
+    let controller = Rc::downgrade(controller);
+    glib::spawn_future_local(async move {
+        loop {
+            match receiver.recv().await {
+                Ok(WorkerEvent::Progress(progress)) => {
+                    if let Some(controller) = controller.upgrade() {
+                        if let Some(window) = controller.progress.borrow().as_ref() {
+                            window.update(&progress);
+                        }
+                    }
+                }
+                Ok(WorkerEvent::Done(outcome)) => {
+                    if let Some(controller) = controller.upgrade() {
+                        controller.finish_job();
+                        finish(&controller, outcome);
+                    }
+                    return;
+                }
+                Err(_) => {
+                    // The channel closes only when the worker dies without a
+                    // result, which means the thread panicked.
+                    if let Some(controller) = controller.upgrade() {
+                        controller.finish_job();
+                        controller.notify(on_dropped.0, on_dropped.1);
+                    }
+                    return;
+                }
+            }
+        }
+    });
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Cli {
     pub hidden: bool,
@@ -77,6 +145,9 @@ pub struct Controller {
     pub settings: RefCell<Option<SettingsWindow>>,
     pub action_launcher: RefCell<Option<ActionLauncher>>,
     action_sources: RefCell<Vec<PathBuf>>,
+    /// Files waiting to be moved by the folder wheel in picker mode, staged
+    /// by the To Project action. Cleared when the wheel hides or picks.
+    staged_move: RefCell<Option<Vec<PathBuf>>>,
     action_category: Cell<Category>,
     action_mode: Cell<WheelMode>,
     action_tool: RefCell<Option<ToolId>>,
@@ -95,6 +166,35 @@ pub struct Controller {
     cli_handled: Cell<bool>,
     startup_notice: RefCell<Option<String>>,
     fatal_error: RefCell<Option<String>>,
+}
+
+/// One long-lived thread serves every desktop notification. Spawning a thread
+/// (and a fresh D-Bus connection) per notification is wasteful and unbounded
+/// when several operations finish at once.
+fn notification_sender() -> &'static std::sync::mpsc::Sender<(String, String)> {
+    static SENDER: std::sync::OnceLock<std::sync::mpsc::Sender<(String, String)>> =
+        std::sync::OnceLock::new();
+    SENDER.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::channel::<(String, String)>();
+        std::thread::Builder::new()
+            .name("notifications".into())
+            .spawn(move || {
+                while let Ok((title, body)) = receiver.recv() {
+                    if let Err(error) = notify_rust::Notification::new()
+                        .summary(&title)
+                        .body(&body)
+                        .appname("RadialDeck")
+                        .icon("io.github.raihan.RadialDeck")
+                        .timeout(notify_rust::Timeout::Milliseconds(4000))
+                        .show()
+                    {
+                        tracing::warn!("notification failed: {error}");
+                    }
+                }
+            })
+            .expect("spawn notification worker");
+        sender
+    })
 }
 
 impl Controller {
@@ -155,6 +255,7 @@ impl Controller {
             settings: RefCell::new(None),
             action_launcher: RefCell::new(None),
             action_sources: RefCell::new(Vec::new()),
+            staged_move: RefCell::new(None),
             action_category: Cell::new(Category::Images),
             action_mode: Cell::new(WheelMode::Convert),
             action_tool: RefCell::new(None),
@@ -380,6 +481,7 @@ impl Controller {
                 .map(|folder| WheelFolder {
                     id: folder.id,
                     label: folder.label.clone(),
+                    path: folder.path.clone(),
                     color: folder.color.clone(),
                     availability: config.availability_of(folder),
                 })
@@ -394,6 +496,13 @@ impl Controller {
                     folder_count: project.folders.len(),
                 })
                 .collect(),
+            banner: self.staged_move.borrow().as_ref().map(|sources| {
+                format!(
+                    "Pick a folder to move {} file{} · Esc cancels",
+                    sources.len(),
+                    if sources.len() == 1 { "" } else { "s" }
+                )
+            }),
         }
     }
 
@@ -424,6 +533,9 @@ impl Controller {
     }
 
     pub fn hide_launcher(&self) {
+        // Leaving the wheel cancels a pending pick; otherwise a staged move
+        // would silently fire on a later, unrelated folder choice.
+        self.staged_move.borrow_mut().take();
         if let Some(launcher) = self.launcher.borrow().as_ref() {
             launcher.hide();
         }
@@ -491,17 +603,72 @@ impl Controller {
 
     pub fn handle_wheel_action(self: &Rc<Self>, action: Action) {
         match action {
-            Action::Launch(folder, intent) => self.launch(folder, intent),
+            Action::Launch(folder, intent) => {
+                let staged = self.staged_move.borrow_mut().take();
+                if let Some(sources) = staged {
+                    self.move_staged_into(&sources, folder);
+                } else {
+                    self.launch(folder, intent);
+                }
+            }
             Action::Dismiss => self.hide_launcher(),
             Action::Manage => {
+                let picking = self.staged_move.borrow().is_some();
                 self.hide_launcher();
-                self.open_manage();
+                if picking {
+                    self.notify("Move cancelled", "Run To Project again to choose a folder.");
+                } else {
+                    self.open_manage();
+                }
             }
             Action::Remove(folder_id) => {
                 let project_id = self.config.borrow().active_project().id;
                 self.remove_folder(project_id, folder_id);
             }
         }
+    }
+
+    /// Picker mode: the chosen project folder receives the staged files.
+    fn move_staged_into(self: &Rc<Self>, sources: &[PathBuf], folder_id: Uuid) {
+        let Some(folder) = self
+            .config
+            .borrow()
+            .active_project()
+            .folders
+            .iter()
+            .find(|folder| folder.id == folder_id)
+            .cloned()
+        else {
+            return;
+        };
+        self.hide_launcher();
+        match deck_core::availability(&folder.path) {
+            deck_core::Availability::Available => {}
+            deck_core::Availability::Missing => {
+                self.notify(
+                    "Folder unavailable",
+                    &format!("{} was not found:\n{}", folder.label, folder.path.display()),
+                );
+                return;
+            }
+            deck_core::Availability::Offline => {
+                self.notify(
+                    "Drive not connected",
+                    &format!(
+                        "{} is on a drive that is not mounted:\n{}",
+                        folder.label,
+                        folder.path.display()
+                    ),
+                );
+                return;
+            }
+        }
+        tracing::info!(
+            "to project: {} file(s) into {}",
+            sources.len(),
+            folder.label
+        );
+        self.move_async(sources, folder.path.clone());
     }
 
     pub fn launch(self: &Rc<Self>, folder_id: Uuid, intent: Intent) {
@@ -907,20 +1074,7 @@ impl Controller {
     }
 
     pub fn notify(&self, title: &str, body: &str) {
-        let title = title.to_owned();
-        let body = body.to_owned();
-        std::thread::spawn(move || {
-            if let Err(error) = notify_rust::Notification::new()
-                .summary(&title)
-                .body(&body)
-                .appname("RadialDeck")
-                .icon("io.github.raihan.RadialDeck")
-                .timeout(notify_rust::Timeout::Milliseconds(4000))
-                .show()
-            {
-                tracing::warn!("notification failed: {error}");
-            }
-        });
+        let _ = notification_sender().send((title.to_owned(), body.to_owned()));
     }
 
     pub fn quit(&self) {
@@ -992,7 +1146,9 @@ impl Controller {
         self.action_tool.replace(None);
         self.action_status.replace(None);
         if mode == WheelMode::Actions {
-            *self.airdrop_devices.borrow_mut() = actions::kdeconnect_devices();
+            // Render immediately; probing KDE Connect can block on D-Bus, so
+            // it must not run on the main thread before first paint.
+            self.probe_airdrop_devices();
         }
 
         let recreate = self
@@ -1037,6 +1193,36 @@ impl Controller {
         } else {
             self.show_actions_mode(Vec::new(), self.action_mode.get());
         }
+    }
+
+    /// Probes KDE Connect off the main thread and patches the Send targets in
+    /// when the probe lands. The wheel renders with the cached list first.
+    fn probe_airdrop_devices(self: &Rc<Self>) {
+        let (sender, receiver) = async_channel::unbounded::<Vec<actions::KdeDevice>>();
+        std::thread::spawn(move || {
+            let _ = sender.send_blocking(actions::kdeconnect_devices());
+        });
+        let controller = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let Ok(devices) = receiver.recv().await else {
+                return;
+            };
+            let Some(controller) = controller.upgrade() else {
+                return;
+            };
+            *controller.airdrop_devices.borrow_mut() = devices;
+            // A parameter form claims the wheel while open; repatching wedges
+            // under it would throw the user out of the form.
+            if controller.action_tool.borrow().is_none()
+                && controller
+                    .action_launcher
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(ActionLauncher::is_visible)
+            {
+                controller.refresh_actions();
+            }
+        });
     }
 
     fn action_view(&self) -> ActionView {
@@ -1094,6 +1280,12 @@ impl Controller {
                 [
                     ("copy", "Copy", "Copy files to the clipboard", None),
                     ("move", "Move", "Move files to a folder", None),
+                    (
+                        "to_project",
+                        "To Project",
+                        "Move into a project folder",
+                        None,
+                    ),
                     ("copy_path", "Copy Path", "Copy absolute paths", None),
                     ("terminal", "Terminal", "Open a terminal at the files", None),
                     ("airdrop", "Send", "Send with KDE Connect", airdrop_reason),
@@ -1201,12 +1393,12 @@ impl Controller {
         }
     }
 
-    fn apply_action_mode(&self, mode: WheelMode) {
+    fn apply_action_mode(self: &Rc<Self>, mode: WheelMode) {
         self.action_mode.set(mode);
         self.action_tool.replace(None);
         self.action_status.replace(None);
         if mode == WheelMode::Actions {
-            *self.airdrop_devices.borrow_mut() = actions::kdeconnect_devices();
+            self.probe_airdrop_devices();
         }
         self.refresh_actions();
     }
@@ -1327,57 +1519,19 @@ impl Controller {
         };
         let token = deck_core::CancelToken::new();
         *self.cancel.borrow_mut() = Some(token.clone());
-        let (sender, receiver) = async_channel::unbounded();
-        let (progress_sender, progress_receiver) = async_channel::unbounded();
-        let reporter: deck_core::job::Reporter = std::sync::Arc::new(move |progress| {
-            let _ = progress_sender.send_blocking(progress);
-        });
         let output = self.output_location();
         let total = request.sources.len();
-        std::thread::spawn(move || {
-            let outcome = tools::execute_with(&request, output, token, reporter);
-            let _ = sender.send_blocking(outcome);
-        });
-
-        if let Some(window) = self.ensure_progress_window() {
-            window.show_operation(&format!("{}…", id.label()), total);
-        }
-
-        let controller = Rc::downgrade(self);
-        glib::spawn_future_local(async move {
-            loop {
-                if let Ok(progress) = progress_receiver.try_recv() {
-                    if let Some(controller) = controller.upgrade() {
-                        if let Some(window) = controller.progress.borrow().as_ref() {
-                            window.update(&progress);
-                        }
-                    }
-                    continue;
-                }
-                match receiver.try_recv() {
-                    Ok(outcome) => {
-                        if let Some(controller) = controller.upgrade() {
-                            controller.finish_job();
-                            controller.report_tool(id, &outcome);
-                        }
-                        return;
-                    }
-                    Err(async_channel::TryRecvError::Empty) => {
-                        glib::timeout_future(std::time::Duration::from_millis(60)).await;
-                    }
-                    Err(async_channel::TryRecvError::Closed) => {
-                        if let Some(controller) = controller.upgrade() {
-                            controller.finish_job();
-                            controller.notify(
-                                "Tool failed",
-                                "The tool worker stopped unexpectedly. Check the log.",
-                            );
-                        }
-                        return;
-                    }
-                }
-            }
-        });
+        run_worker(
+            self,
+            format!("{}…", id.label()),
+            total,
+            move |reporter| tools::execute_with(&request, output, token, reporter),
+            move |controller, outcome| controller.report_tool(id, &outcome),
+            (
+                "Tool failed",
+                "The tool worker stopped unexpectedly. Check the log.",
+            ),
+        );
     }
 
     fn report_tool(&self, id: ToolId, outcome: &ToolOutcome) {
@@ -1557,6 +1711,29 @@ impl Controller {
                 }
             }
             "move" => self.choose_move_destination(&sources),
+            "to_project" => {
+                // Chain the two wheels: the folder wheel opens in picker mode
+                // and the chosen folder becomes the move destination.
+                let folders = self
+                    .config
+                    .borrow()
+                    .projects
+                    .iter()
+                    .any(|project| !project.folders.is_empty());
+                let reason = if folders {
+                    None
+                } else {
+                    Some("No project folders yet".to_owned())
+                };
+                if let Some(reason) = reason {
+                    self.action_status.replace(Some(reason));
+                    self.refresh_actions();
+                    return;
+                }
+                *self.staged_move.borrow_mut() = Some(sources.clone());
+                self.hide_actions();
+                self.show_launcher();
+            }
             "airdrop" => self.choose_airdrop_device(&sources),
             "float" => {
                 self.hide_actions();
@@ -1791,72 +1968,31 @@ impl Controller {
 
         let token = deck_core::CancelToken::new();
         *self.cancel.borrow_mut() = Some(token.clone());
-        let (sender, receiver) = async_channel::unbounded();
-        let (progress_sender, progress_receiver) = async_channel::unbounded();
-        let reporter: deck_core::job::Reporter = std::sync::Arc::new(move |progress| {
-            let _ = progress_sender.send_blocking(progress);
-        });
         let thread_sources = sources.clone();
-        let tools = self.tools;
         let thread_target = target_id.clone();
+        let report_target = target_id.clone();
         let output = self.output_location();
         let total = sources.len();
-        std::thread::spawn(move || {
-            let outcome = deck_core::convert::convert_with(
-                &thread_sources,
-                category,
-                &thread_target,
-                &tools,
-                output,
-                token,
-                reporter,
-            );
-            let _ = sender.send_blocking(outcome);
-        });
-
-        if let Some(window) = self.ensure_progress_window() {
-            window.show_operation(
-                &format!("Converting to {}…", target_id.to_uppercase()),
-                total,
-            );
-        }
-
-        let controller = Rc::downgrade(self);
-        glib::spawn_future_local(async move {
-            loop {
-                if let Ok(progress) = progress_receiver.try_recv() {
-                    if let Some(controller) = controller.upgrade() {
-                        if let Some(window) = controller.progress.borrow().as_ref() {
-                            window.update(&progress);
-                        }
-                    }
-                    continue;
-                }
-                match receiver.try_recv() {
-                    Ok(outcome) => {
-                        if let Some(controller) = controller.upgrade() {
-                            controller.finish_job();
-                            controller.report_conversion(&target_id, &outcome);
-                        }
-                        return;
-                    }
-                    Err(async_channel::TryRecvError::Empty) => {
-                        glib::timeout_future(std::time::Duration::from_millis(60)).await;
-                    }
-                    Err(async_channel::TryRecvError::Closed) => {
-                        if let Some(controller) = controller.upgrade() {
-                            controller.finish_job();
-                            tracing::error!("conversion worker stopped without a result");
-                            controller.notify(
-                                "Conversion failed",
-                                "The converter stopped unexpectedly. Check the log for details.",
-                            );
-                        }
-                        return;
-                    }
-                }
-            }
-        });
+        run_worker(
+            self,
+            format!("Converting to {}…", target_id.to_uppercase()),
+            total,
+            move |reporter| {
+                deck_core::convert::convert_with(
+                    &thread_sources,
+                    category,
+                    &thread_target,
+                    output,
+                    token,
+                    reporter,
+                )
+            },
+            move |controller, outcome| controller.report_conversion(&report_target, &outcome),
+            (
+                "Conversion failed",
+                "The converter stopped unexpectedly. Check the log for details.",
+            ),
+        );
     }
 
     fn report_conversion(&self, target_id: &str, outcome: &deck_core::Outcome) {

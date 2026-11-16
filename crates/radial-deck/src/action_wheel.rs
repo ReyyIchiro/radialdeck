@@ -16,7 +16,11 @@ use pangocairo::functions as pangocairo;
 
 use crate::theme;
 
-const ACCENT: (f64, f64, f64) = (1.0, 0.353, 0.0);
+/// The hand-drawn wheel follows the same accent as the CSS panels: the KDE
+/// accent when set, else the built-in orange (see `theme::accent`).
+fn accent() -> (f64, f64, f64) {
+    crate::theme::accent()
+}
 
 #[derive(Debug, Clone)]
 pub struct WheelTarget {
@@ -78,11 +82,17 @@ impl Geometry {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum Hit {
     Wedge(usize),
     Center,
     Outside,
 }
+
+/// Pointer slop beyond the drawn ring: a click/hover a few pixels outside
+/// the outer edge still selects the wedge under it, so near-misses on the
+/// rim do not fall through to the dismiss scrim.
+pub(crate) const EDGE_PAD: f64 = 6.0;
 
 fn hit_test(geometry: &Geometry, count: usize, x: f64, y: f64) -> Hit {
     let dx = x - geometry.cx;
@@ -91,7 +101,7 @@ fn hit_test(geometry: &Geometry, count: usize, x: f64, y: f64) -> Hit {
     if distance <= geometry.inner {
         return Hit::Center;
     }
-    if distance > geometry.outer || count == 0 {
+    if distance > geometry.outer + EDGE_PAD || count == 0 {
         return Hit::Outside;
     }
     let step = TAU / count as f64;
@@ -365,7 +375,8 @@ pub(crate) fn palette(dark: bool) -> Palette {
             ring_inner: (0.235, 0.235, 0.247),
             ring_outer: (0.153, 0.153, 0.165),
             text: (0.96, 0.96, 0.97),
-            muted: (0.60, 0.60, 0.64),
+            // 4.7:1 on the ring so small wedge labels clear WCAG AA.
+            muted: (0.66, 0.66, 0.70),
             center: (0.125, 0.125, 0.137),
             rim: (1.0, 1.0, 1.0),
             shadow_alpha: 0.45,
@@ -433,7 +444,8 @@ fn draw(
             geometry.outer,
         );
         if is_active && is_available {
-            gradient.add_color_stop_rgb(0.0, ACCENT.0, ACCENT.1, ACCENT.2);
+            let (ar, ag, ab) = accent();
+            gradient.add_color_stop_rgb(0.0, ar, ag, ab);
             gradient.add_color_stop_rgb(1.0, 0.95, 0.26, 0.0);
         } else if is_available {
             gradient.add_color_stop_rgb(
@@ -571,7 +583,7 @@ fn draw_empty(
     palette: &Palette,
     drag_hot: bool,
 ) {
-    let (r, g, b) = if drag_hot { ACCENT } else { palette.muted };
+    let (r, g, b) = if drag_hot { accent() } else { palette.muted };
     cr.set_dash(&[6.0, 7.0], 0.0);
     cr.set_line_width(2.0);
     cr.set_source_rgba(r, g, b, if drag_hot { 0.95 } else { 0.45 });
@@ -645,17 +657,20 @@ fn draw_text(
     alpha: f64,
     strike: bool,
 ) {
-    let layout = pangocairo::create_layout(cr);
+    // Shared scratch layout (see wheel::LAYOUT): fully reconfigured for
+    // this label, including an empty attribute list so a strikethrough from
+    // an earlier label cannot leak into this one.
+    let layout = crate::wheel::scratch_layout(cr);
     layout.set_text(text);
     let mut font = pango::FontDescription::from_string("Sans");
     font.set_absolute_size(size * f64::from(pango::SCALE));
     font.set_weight(weight);
     layout.set_font_description(Some(&font));
+    let attrs = pango::AttrList::new();
     if strike {
-        let attrs = pango::AttrList::new();
         attrs.insert(pango::AttrInt::new_strikethrough(true));
-        layout.set_attributes(Some(&attrs));
     }
+    layout.set_attributes(Some(&attrs));
     let (text_width, text_height) = layout.pixel_size();
     cr.set_source_rgba(color.0, color.1, color.2, alpha);
     cr.move_to(x - text_width as f64 / 2.0, y - text_height as f64 / 2.0);
@@ -685,5 +700,20 @@ mod tests {
             false,
         );
         assert!(!cr.has_current_point().unwrap());
+    }
+
+    #[test]
+    fn rim_near_misses_still_hit_the_wedge() {
+        let geo = Geometry::new(800.0, 380.0);
+        // Straight above the centre is the first wedge; a few pixels past the
+        // drawn ring must still select it, farther out must not.
+        assert_eq!(
+            hit_test(&geo, 4, geo.cx, geo.cy - (geo.outer + 3.0)),
+            Hit::Wedge(0)
+        );
+        assert_eq!(
+            hit_test(&geo, 4, geo.cx, geo.cy - (geo.outer + EDGE_PAD + 4.0)),
+            Hit::Outside
+        );
     }
 }

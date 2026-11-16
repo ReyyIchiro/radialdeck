@@ -86,7 +86,7 @@ pub fn extract(source: &Path) -> Result<PathBuf, ConvertError> {
 fn write_gzip_file(source: &Path, destination: &Path) -> Result<(), ConvertError> {
     let mut input = File::open(source)
         .map_err(|error| ConvertError(format!("open {}: {error}", source.display())))?;
-    let output = File::create(destination)
+    let output = super::output::create_exclusive(destination)
         .map_err(|error| ConvertError(format!("create {}: {error}", destination.display())))?;
     let mut encoder = GzEncoder::new(output, Compression::default());
     std::io::copy(&mut input, &mut encoder)
@@ -142,7 +142,7 @@ fn write_zip(
     entry_name: Option<&str>,
     destination: &Path,
 ) -> Result<(), ConvertError> {
-    let file = File::create(destination)
+    let file = super::output::create_exclusive(destination)
         .map_err(|error| ConvertError(format!("create {}: {error}", destination.display())))?;
     let mut zip = ZipWriter::new(file);
     let file_options = SimpleFileOptions::default()
@@ -218,7 +218,7 @@ fn write_tar_children(
     destination: &Path,
     gzip: bool,
 ) -> Result<(), ConvertError> {
-    let file = File::create(destination)
+    let file = super::output::create_exclusive(destination)
         .map_err(|error| ConvertError(format!("create {}: {error}", destination.display())))?;
     if gzip {
         let encoder = GzEncoder::new(file, Compression::default());
@@ -262,7 +262,7 @@ fn write_tar(
     destination: &Path,
     gzip: bool,
 ) -> Result<(), ConvertError> {
-    let file = File::create(destination)
+    let file = super::output::create_exclusive(destination)
         .map_err(|error| ConvertError(format!("create {}: {error}", destination.display())))?;
     if gzip {
         let encoder = GzEncoder::new(file, Compression::default());

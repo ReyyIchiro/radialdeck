@@ -88,7 +88,10 @@ impl FloatShelf {
 
         {
             let window = shelf.window.clone();
-            close.connect_clicked(move |_| window.set_visible(false));
+            // Destroy rather than hide: an unmapped layer surface, its widget
+            // tree and the path list would otherwise live for the whole
+            // process. The controller rebuilds the shelf on next use.
+            close.connect_clicked(move |_| window.destroy());
         }
         {
             let shelf = Rc::downgrade(&shelf);

@@ -13,6 +13,8 @@ mod subtitle;
 
 use std::path::{Path, PathBuf};
 
+pub(crate) use output::sanitize;
+pub use output::{create_exclusive, unique_path};
 pub use registry::{ArchiveKind, Category, Target, Tools};
 
 #[derive(Debug, thiserror::Error)]
@@ -52,14 +54,13 @@ pub fn convert_with(
     sources: &[PathBuf],
     category: Category,
     target: &str,
-    tools: &Tools,
     output: crate::OutputLocation,
     cancel: crate::CancelToken,
     reporter: crate::job::Reporter,
 ) -> Outcome {
     crate::job::scope(output, Some(cancel), || {
         crate::job::set_reporter(reporter);
-        let mut outcome = convert(sources, category, target, tools);
+        let mut outcome = convert(sources, category, target);
         if crate::job::cancelled() {
             crate::job::cleanup_registered();
             outcome.created.clear();
@@ -68,7 +69,9 @@ pub fn convert_with(
     })
 }
 
-pub fn convert(sources: &[PathBuf], category: Category, target: &str, _tools: &Tools) -> Outcome {
+/// The engine resolves its own binaries per invocation (`find_tool` is
+/// cached), so no tool table is passed in or trusted from the caller.
+pub fn convert(sources: &[PathBuf], category: Category, target: &str) -> Outcome {
     let mut outcome = Outcome::default();
     crate::job::set_total(sources.len());
     for source in sources {
@@ -77,6 +80,7 @@ pub fn convert(sources: &[PathBuf], category: Category, target: &str, _tools: &T
                 source: source.clone(),
                 message: "Cancelled".into(),
             });
+            crate::job::report_failure(source);
             break;
         }
         if !source.exists() {
@@ -87,11 +91,17 @@ pub fn convert(sources: &[PathBuf], category: Category, target: &str, _tools: &T
                 ))),
                 source,
             );
+            crate::job::report_failure(source);
             continue;
         }
         let result = convert_one(source, category, target);
+        let succeeded = result.is_ok();
         outcome.push(result, source);
-        crate::job::report_file(source);
+        if succeeded {
+            crate::job::report_file(source);
+        } else {
+            crate::job::report_failure(source);
+        }
     }
     outcome
 }
@@ -181,9 +191,8 @@ mod tests {
 
     #[test]
     fn missing_sources_are_reported_without_aborting() {
-        let tools = Tools::default();
         let sources = vec![PathBuf::from("/definitely/missing.png")];
-        let outcome = convert(&sources, Category::Images, "webp", &tools);
+        let outcome = convert(&sources, Category::Images, "webp");
         assert!(outcome.created.is_empty());
         assert_eq!(outcome.failures.len(), 1);
     }
@@ -196,18 +205,10 @@ mod tests {
             .save(&source)
             .unwrap();
         let target = dir.path().join("converted");
-        let tools = Tools::default();
         let outcome = crate::job::scope(
             crate::OutputLocation::Subfolder("converted".into()),
             None,
-            || {
-                convert(
-                    std::slice::from_ref(&source),
-                    Category::Images,
-                    "webp",
-                    &tools,
-                )
-            },
+            || convert(std::slice::from_ref(&source), Category::Images, "webp"),
         );
         assert_eq!(outcome.created.len(), 1);
         assert_eq!(outcome.created[0].parent().unwrap(), target);
@@ -225,11 +226,10 @@ mod tests {
                 .unwrap();
             sources.push(path);
         }
-        let tools = Tools::default();
         let cancel = crate::CancelToken::new();
         cancel.cancel();
         let outcome = crate::job::scope(crate::OutputLocation::Alongside, Some(cancel), || {
-            convert(&sources, Category::Images, "webp", &tools)
+            convert(&sources, Category::Images, "webp")
         });
         assert!(outcome.created.is_empty());
         assert!(outcome
@@ -249,8 +249,7 @@ mod tests {
                 .unwrap();
             sources.push(path);
         }
-        let tools = Tools::default();
-        let outcome = convert(&sources, Category::Images, "webp", &tools);
+        let outcome = convert(&sources, Category::Images, "webp");
         assert_eq!(outcome.created.len(), 2);
         assert!(outcome.failures.is_empty());
         assert!(outcome

@@ -142,7 +142,7 @@ pub enum FolderError {
 
 /// Lexical comparison key. Canonicalisation is attempted so symlinked paths
 /// do not produce duplicates, but missing paths still compare as written.
-pub fn comparable_path(path: &Path) -> PathBuf {
+fn comparable_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 

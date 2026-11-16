@@ -13,7 +13,9 @@ thiserror.workspace = true
 uuid.workspace = true
 directories.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff", "ico", "pnm", "qoi", "tga"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# `deflate-zlib` keeps flate2's zlib backend and drops zopfli, which the
+# default `deflate` feature adds and which makes every ZIP write ~10x slower.
+zip = { version = "2", default-features = false, features = ["deflate-zlib"] }
 flate2 = "1"
 tar = "0.4"
 walkdir = "2"

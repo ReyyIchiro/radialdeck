@@ -1,5 +1,15 @@
 # RadialDeck
 
+<p align="center">
+  <img src="docs/screenshots/convert.png" alt="Roda konversi RadialDeck" width="49%">
+  <img src="docs/screenshots/tools.png" alt="Roda Tools RadialDeck" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/actions.png" alt="Roda Actions RadialDeck" width="32%">
+  <img src="docs/screenshots/settings.png" alt="Settings RadialDeck" width="32%">
+  <img src="docs/screenshots/settings-dark.png" alt="Settings tema gelap RadialDeck" width="32%">
+</p>
+
 Overlay radial untuk Linux dengan dua alur yang terpisah:
 
 - **Quick actions** — `Ctrl+Alt+Space`: konversi file/arsip dan aksi file.
@@ -40,10 +50,15 @@ kanan file di Dolphin untuk langsung membuka roda konversi.
 | Konfigurasi JSON atomik di `XDG_CONFIG_HOME`; migrasi schema | ✅ |
 | Log harian di `XDG_STATE_HOME` (retensi 7 file) | ✅ |
 | Progres langsung + tombol **Cancel** untuk tool/konversi panjang | ✅ |
+| Aksi **To Project**: pindahkan hasil kerja ke folder proyek lewat roda | ✅ |
+| ETA per file yang jujur dari statistik FFmpeg (`64% · ~18s left`) | ✅ |
+| Aksen mengikuti **AccentColor** KDE (kontras dihitung, fallback oranye) | ✅ |
 | Lokasi output: di samping file, subfolder, atau satu folder tetap | ✅ |
 | Urutan & visibilitas tool per kategori (Settings) | ✅ |
 | Riwayat operasi + Undo dari tray | ✅ |
 | CLI batch `radial-deck convert` tanpa membuka UI | ✅ |
+| `convert --list`: target tersedia per kategori, tanpa GTK | ✅ |
+| Panel progres: penghitung batch, badge gagal, fase manusia, pulse | ✅ |
 | Renderer Cairo default: ringan, tidak membutuhkan GPU | ✅ |
 
 ---
@@ -80,10 +95,7 @@ cd radial-deck
 ./scripts/install.sh
 ```
 
-Script memasang binary ke `~/.local/bin`, desktop entry, ikon, dan service menu Dolphin.
-Jalankan `radial-deck --hidden` sekali, lalu setujui dialog *Global Shortcuts* KDE.
-Aktifkan **Launch at login** di Settings supaya hotkey tetap ada setelah reboot; kalau
-hotkey diam saja, jalankan `./scripts/doctor.sh`.
+Pemasangan di atas membuat binary ke `~/.local/bin/radial-deck`, desktop entry, ikon, dan service menu Dolphin. Jalankan `radial-deck --hidden` sekali, lalu setujui dialog *Global Shortcuts* KDE. Aktifkan **Launch at login** di Settings supaya hotkey tetap ada setelah reboot; kalau hotkey diam saja, jalankan `./scripts/doctor.sh`.
 
 ### Arch / CachyOS (AUR)
 
@@ -92,10 +104,12 @@ cd packaging/aur
 makepkg -si
 ```
 
+Paket mencakup dependensi wajib aplikasi; konverter opsional tetap dipasang sesuai kebutuhan pengguna melalui pengaturan aplikasi.
+
 ### Build manual
 
 ```bash
-# Arch
+# Arch / CachyOS
 sudo pacman -S gtk4 gtk4-layer-shell xdg-desktop-portal rust
 
 cargo build --release --locked
@@ -119,6 +133,7 @@ install -Dm755 target/release/radial-deck ~/.local/bin/radial-deck
 | `radial-deck --settings` | Jendela pengaturan bersidebar: hotkey, tema, output, tool, log |
 | `radial-deck --reset-config` | Hapus konfigurasi dan mulai ulang |
 | `radial-deck convert --to webp FILES…` | Konversi batch headless, cetak path hasil |
+| `radial-deck convert --list [FILES…]` | Daftar target yang tersedia (per kategori atau semua) |
 | `radial-deck --version` / `--help` | Versi / bantuan |
 
 Subcommand batch tidak memuat GTK sama sekali, jadi bisa dipakai lewat SSH:
@@ -130,6 +145,10 @@ radial-deck convert --to mp4 --subfolder Converted clip.mov
 
 Path hasil dicetak satu per baris (kecuali `--quiet`); kegagalan per file ke stderr.
 Exit code `0` hanya bila semua file berhasil, `2` untuk argumen/target yang tidak valid.
+
+`convert --list` menjawab "ke mana saja file ini bisa dikonversi": dengan file,
+hanya target yang valid untuk kategorinya; tanpa file, overview semua kategori
+sesuai tool yang terpasang. Output satu baris per kategori, mudah di-parse script.
 
 ### Shortcut & interaksi roda
 
@@ -153,8 +172,9 @@ Exit code `0` hanya bila semua file berhasil, `2` untuk argumen/target yang tida
 
 Konversi dan tool berjalan di thread terpisah; roda langsung tertutup. Panel progres kecil
 muncul di pojok kanan bawah (layer-shell, tanpa mengambil fokus keyboard) dan menampilkan
-file yang sedang diproses plus output mentah FFmpeg/Ghostscript. Tombol **Cancel**
-menghentikan proses anak dan menghapus output parsial yang sudah terdaftar. Notifikasi
+judul operasi, penghitung `done / total`, badge `N failed`, fase kerja manusia
+(Encoding / Rendering) alih-alih output mentah tool, bar aksen, dan tombol Cancel.
+Cancel menghentikan proses anak dan menghapus output parsial yang sudah terdaftar. Notifikasi
 menampilkan ringkasan sukses/gagal. Hasilnya juga masuk riwayat tray
 (**Recent Operations → Undo …**): Undo hanya menghapus file yang dibuat operasi itu, jadi
 file lama tidak pernah ikut terhapus. Riwayat disimpan terpisah di
@@ -305,6 +325,7 @@ crates/
 ```
 
 Diagram lengkap, threading, dan keputusan keamanan: [`docs/architecture.md`](docs/architecture.md).
+Referensi fitur satu halaman untuk pengguna dan agen AI: [`docs/manual.md`](docs/manual.md).
 Riset dan perbandingan stack: [`docs/research.md`](docs/research.md).
 
 ---
@@ -330,17 +351,19 @@ framebuffer offscreen. Layar, pointer, dan fokus keyboard Anda tidak tersentuh.
 
 ```bash
 cargo build --release
-scripts/ui-smoke.sh          # 45 pemeriksaan, exit 1 bila ada yang gagal
+scripts/ui-smoke.sh          # 51 pemeriksaan, exit 1 bila ada yang gagal
 ```
 
-Tujuh lane yang diuji: **wayland** (overlay benar-benar ter-map dan tergambar, dibuktikan
+Delapan lane yang diuji: **wayland** (overlay benar-benar ter-map dan tergambar, dibuktikan
 screenshot), **x11** (form tool, Float shelf, `Esc`, live-modifier, lewat Xwayland
-bersarang), **settings** (Down menelusuri keenam halaman, tiap halaman difoto),
-**projects** (daftar folder dari config yang di-seed), **output** (dropdown lokasi output
-dipilih penuh lewat keyboard), **dark** (tema gelap benar-benar menggelapkan jendela),
-dan **CLI batch** (tanpa GTK sama sekali).
+bersarang), **settings** (Down menelusuri keenam halaman termasuk Advanced dengan kartu
+dukungan, tiap halaman difoto), **projects** (daftar folder dari config yang di-seed),
+**output** (dropdown lokasi output dipilih penuh lewat keyboard), **dark** (tema gelap
+benar-benar menggelapkan jendela), dan **CLI batch** (tanpa GTK sama sekali).
 Butuh `kwin_wayland`, `spectacle`, `xdotool`, dan `magick`. Screenshot serta log tersimpan
-di `/tmp/radial-deck-ui-smoke` (ubah dengan `RADIAL_DECK_SMOKE_OUT`).
+di `/tmp/radial-deck-ui-smoke` (ubah dengan `RADIAL_DECK_SMOKE_OUT`). Tiga render roda
+(Convert/Tools/Actions) dibandingkan terhadap referensi `scripts/golden`; setelah perubahan
+visual yang disengaja, regenerasi dengan `RADIAL_DECK_GOLDEN_REGEN=1`.
 
 Skrip ini juga membuat bus D-Bus sesi sendiri, jadi tray, notifikasi, portal, dan KDE
 Connect selama tes tidak menyentuh desktop Anda. Semua proses yang lahir di bus itu
@@ -353,7 +376,7 @@ tanpa menggantung pipe pemanggilnya.
 
 | Test | Hasil |
 |---|---|
-| Unit test | ✅ 85 lulus (`deck-core` 69, app 16) |
+| Unit test | ✅ 98 lulus (`deck-core` 73, app 25) |
 | fmt + clippy `-D warnings` | ✅ bersih |
 | Layer-shell roda konversi + roda folder | ✅ screenshot KDE Wayland |
 | Dua hotkey portal | ✅ `Ctrl+Alt+Space` dan `Ctrl+Alt+Q` aktif bersamaan |
@@ -362,6 +385,7 @@ tanpa menggantung pipe pemanggilnya.
 | Mode tanpa hasil filter | ✅ sektor disembunyikan, caption “No matches” |
 | Manage 8 project / 4 folder | ✅ rail, rename, warna, add folder, urutan, badge missing |
 | Project color + folder color | ✅ popover palet, tersimpan ke config |
+| Settings → Advanced → Contact & support | ✅ halaman Advanced ter-render (grafik 1 lane) + 4 `LinkButton`; klik tautan belum diuji |
 | Dismiss `Esc` / klik luar / reopen hotkey | ✅ window dan state controller konsisten |
 | PNG → JPG via klik roda | ✅ file JPEG valid |
 | WAV → MP3 via klik roda | ✅ ffprobe valid |
@@ -377,12 +401,14 @@ tanpa menggantung pipe pemanggilnya.
 | Form menahan `Ctrl`/`Shift`/`Super` | ✅ `Ctrl+A` memilih teks, mode tidak berpindah |
 | Overlay X11 mengikuti monitor kursor | ✅ 1920×1080 penuh di eDP-1, bukan monitor lain |
 | Layer-shell di-anchor ke monitor kursor | ✅ roda muncul di monitor tempat pointer berada |
-| Progres + Cancel | ✅ stream stderr FFmpeg, output parsial dibersihkan, proses tetap hidup |
+| Progres + Cancel | ✅ fase manusia di panel (bukan stderr mentah), pulse saat belum ada fraksi, output parsial dibersihkan |
 | Lokasi output (subfolder / folder tetap) | ✅ unit test + konversi nyata ke folder terpisah |
 | Urutan tool kustom per kategori | ✅ unit test; daftar kosong menyembunyikan semua tool |
 | Riwayat + Undo | ✅ entri tersimpan, Undo menghapus output dan memperbarui tray |
 | CLI batch `convert` | ✅ exit 0/2, nama bentrok `-1`, tanpa inisialisasi GTK (jalan di SSH) |
-| `scripts/ui-smoke.sh` (sesi KWin virtual) | ✅ 45/45 lulus tanpa menyentuh layar nyata |
+| `scripts/ui-smoke.sh` (sesi KWin virtual) | ✅ 51/51 lulus tanpa menyentuh layar nyata |
+| Golden-image roda (Convert/Tools/Actions) | ✅ AE=0 terhadap `scripts/golden` |
+| `scripts/bench.sh` (startup/list/throughput) | ✅ baseline tersimpan, compare lulus |
 | Portal tanpa `GlobalShortcuts` saat login | ✅ retry backoff + drop-in systemd, hotkey pulih sendiri |
 | Binary release | 6.9 MiB (stripped) |
 
@@ -477,9 +503,30 @@ Flatpak adalah pekerjaan Linux berikutnya.
 
 ---
 
+## Changelog
+
+Riwayat versi: [CHANGELOG.md](CHANGELOG.md). Rilis ditandai dengan tag `vX.Y.Z`
+yang dipakai PKGBUILD AUR.
+
+## Dukungan
+
+- **Bug dan usulan fitur:** [GitHub Issues](https://github.com/ReyyIchiro/radialdeck/issues).
+  Sertakan versi (`radial-deck --version`), desktop/sesi, langkah reproduksi, dan log.
+- **Kontak maintainer:** [github.com/ReyyIchiro](https://github.com/ReyyIchiro).
+- **Dukungan pengembangan:** [sociabuzz.com/atepp](https://sociabuzz.com/atepp).
+- **Kerentanan keamanan:** jangan buka issue publik; pakai
+  [GitHub private vulnerability reporting](https://github.com/ReyyIchiro/radialdeck/security/advisories/new).
+
+Tautan yang sama ada di **Settings → Advanced → Contact & support**.
+
 ## Lisensi
 
-MIT — lihat [LICENSE](LICENSE).
+MIT — lihat [LICENSE](LICENSE). Hak cipta 2026 RadialDeck contributors; `deck-core` dan
+`radial-deck` mewarisi lisensi dari `[workspace.package]` di `Cargo.toml`.
+
+Berkas lisensi ikut terpasang bersama binary di semua jalur distribusi:
+`/usr/share/licenses/radial-deck/LICENSE` (AUR dan `scripts/install.sh`) dan
+`/app/share/licenses/radial-deck/LICENSE` (Flatpak).
 
 Referensi: [Tangerine](https://tangerineformac.com/) (produk/UX),
 [ProjectDeck](https://github.com/nizar268/Shortcut-Floating) (arsitektur macOS).

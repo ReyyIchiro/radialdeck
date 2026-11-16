@@ -47,6 +47,7 @@ fi
 
 # ── Install binary ────────────────────────────────────────────────────────────
 install -Dm755 "target/$PROFILE/radial-deck" "$BIN/radial-deck"
+install -Dm644 LICENSE "$SHARE/licenses/radial-deck/LICENSE"
 
 # ── Install desktop entry (Exec = absolute path for portal app ID lookup) ─────
 mkdir -p "$APPS"

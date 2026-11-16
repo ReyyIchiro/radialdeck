@@ -1,6 +1,7 @@
 //! Platform-independent domain logic: configuration, folder shortcuts,
 //! search and persistence. No UI or Linux-specific code lives here.
 
+pub mod binaries;
 pub mod config;
 pub mod convert;
 pub mod dependencies;
