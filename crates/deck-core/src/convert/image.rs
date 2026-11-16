@@ -7,14 +7,13 @@ use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ExtendedColorType, ImageFormat, ImageReader};
 
 use super::output::unique_path;
+use super::registry::IMAGE_NATIVE;
 use super::ConvertError;
 
-pub const NATIVE: [&str; 11] = [
-    "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "ico", "qoi", "tga", "pnm",
-];
-
+/// Sources the `image` crate decodes without ImageMagick. Derived from the
+/// registry list so the wheel and the engine can never drift apart.
 pub fn is_native(extension: &str) -> bool {
-    NATIVE.contains(&extension)
+    IMAGE_NATIVE.contains(&extension)
 }
 
 pub fn convert(source: &Path, target_extension: &str) -> Result<PathBuf, ConvertError> {
@@ -36,7 +35,7 @@ pub fn convert(source: &Path, target_extension: &str) -> Result<PathBuf, Convert
 }
 
 fn write(image: &DynamicImage, destination: &Path, extension: &str) -> Result<(), ConvertError> {
-    let file = File::create(destination)
+    let file = super::output::create_exclusive(destination)
         .map_err(|error| ConvertError(format!("create {}: {error}", destination.display())))?;
     let mut writer = std::io::BufWriter::new(file);
 

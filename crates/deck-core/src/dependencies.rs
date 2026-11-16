@@ -4,6 +4,7 @@
 //! the headless `doctor` command all describe the same set of requirements.
 //! Detection only looks at `PATH`; nothing is installed automatically.
 
+use crate::binaries;
 use std::path::PathBuf;
 
 use crate::convert::registry::find_tool;
@@ -35,7 +36,7 @@ const CATALOG: &[Dependency] = &[
         id: "imagemagick",
         label: "ImageMagick",
         purpose: "Image tools, collages, and PDF output",
-        binaries: &["magick", "convert"],
+        binaries: &[binaries::IMAGEMAGICK, binaries::CONVERT],
         package: PackageNames {
             arch: "imagemagick",
             debian: "imagemagick",
@@ -46,7 +47,7 @@ const CATALOG: &[Dependency] = &[
         id: "ffmpeg",
         label: "FFmpeg",
         purpose: "Video and audio conversions and tools",
-        binaries: &["ffmpeg"],
+        binaries: &[binaries::FFMPEG],
         package: PackageNames {
             arch: "ffmpeg",
             debian: "ffmpeg",
@@ -57,7 +58,7 @@ const CATALOG: &[Dependency] = &[
         id: "ghostscript",
         label: "Ghostscript",
         purpose: "PDF compression",
-        binaries: &["gs"],
+        binaries: &[binaries::GHOSTSCRIPT],
         package: PackageNames {
             arch: "ghostscript",
             debian: "ghostscript",
@@ -68,7 +69,11 @@ const CATALOG: &[Dependency] = &[
         id: "poppler",
         label: "Poppler",
         purpose: "PDF to image, text, and page tools",
-        binaries: &["pdftoppm", "pdfunite", "pdfseparate"],
+        binaries: &[
+            binaries::PDFTOPPM,
+            binaries::PDFUNITE,
+            binaries::PDFSEPARATE,
+        ],
         package: PackageNames {
             arch: "poppler",
             debian: "poppler-utils",
@@ -79,7 +84,7 @@ const CATALOG: &[Dependency] = &[
         id: "libreoffice",
         label: "LibreOffice",
         purpose: "Document, slide, and spreadsheet conversions",
-        binaries: &["soffice", "libreoffice"],
+        binaries: &[binaries::SOFFICE, binaries::LIBREOFFICE],
         package: PackageNames {
             arch: "libreoffice-fresh",
             debian: "libreoffice",
@@ -90,7 +95,7 @@ const CATALOG: &[Dependency] = &[
         id: "pandoc",
         label: "Pandoc",
         purpose: "Markdown conversion",
-        binaries: &["pandoc"],
+        binaries: &[binaries::PANDOC],
         package: PackageNames {
             arch: "pandoc-cli",
             debian: "pandoc",
@@ -101,7 +106,7 @@ const CATALOG: &[Dependency] = &[
         id: "7zip",
         label: "7-Zip",
         purpose: "Extracting archives the built-in reader cannot open",
-        binaries: &["7z", "7zz"],
+        binaries: &[binaries::SEVENZIP, binaries::SEVENZIP_ALT],
         package: PackageNames {
             arch: "7zip",
             debian: "7zip",

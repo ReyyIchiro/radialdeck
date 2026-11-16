@@ -4,7 +4,13 @@
 //! currently possible depends on the source kind and on which external tools
 //! are installed, so availability is computed per invocation.
 
-use std::path::Path;
+use crate::binaries;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+/// Reason shown when a target is evaluated without any source file.
+const NO_SOURCE_REASON: &str = "Drop a file first";
 
 /// Categories mirror the reference app's file families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -140,12 +146,12 @@ pub struct Tools {
 impl Tools {
     pub fn detect() -> Self {
         Self {
-            magick: command_exists("magick") || command_exists("convert"),
-            ffmpeg: command_exists("ffmpeg"),
-            libreoffice: command_exists("soffice") || command_exists("libreoffice"),
-            pdftoppm: command_exists("pdftoppm"),
-            pdftotext: command_exists("pdftotext"),
-            pandoc: command_exists("pandoc"),
+            magick: command_exists(binaries::IMAGEMAGICK) || command_exists(binaries::CONVERT),
+            ffmpeg: command_exists(binaries::FFMPEG),
+            libreoffice: command_exists(binaries::SOFFICE) || command_exists(binaries::LIBREOFFICE),
+            pdftoppm: command_exists(binaries::PDFTOPPM),
+            pdftotext: command_exists(binaries::PDFTOTEXT),
+            pandoc: command_exists(binaries::PANDOC),
         }
     }
 }
@@ -154,11 +160,35 @@ fn command_exists(name: &str) -> bool {
     find_tool(name).is_some()
 }
 
+/// Resolved tool paths for this process. Wheel rendering probes a dozen names
+/// per open and every conversion probes its own; without this cache each of
+/// those walks `PATH` again. Installing a tool while the app runs becomes
+/// visible after [`refresh_tool_cache`] is called (Settings → Recheck does).
+fn tool_cache() -> &'static Mutex<HashMap<String, Option<PathBuf>>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Clears the resolved-tool cache so the next lookup rescans `PATH`.
+pub fn refresh_tool_cache() {
+    tool_cache().lock().unwrap().clear();
+}
+
 /// Resolves an executable the same way detection does. Desktop launches often
 /// omit the sbin directories even though ffmpeg, LibreOffice and ImageMagick
 /// live there on Arch-based distributions, so include them as fallbacks.
-pub fn find_tool(name: &str) -> Option<std::path::PathBuf> {
-    let mut directories: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+pub fn find_tool(name: &str) -> Option<PathBuf> {
+    let mut cache = tool_cache().lock().unwrap();
+    if let Some(resolved) = cache.get(name) {
+        return resolved.clone();
+    }
+    let resolved = scan_for_tool(name);
+    cache.insert(name.to_owned(), resolved.clone());
+    resolved
+}
+
+fn scan_for_tool(name: &str) -> Option<PathBuf> {
+    let mut directories: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
     for fallback in [
@@ -169,7 +199,7 @@ pub fn find_tool(name: &str) -> Option<std::path::PathBuf> {
         "/usr/sbin",
         "/sbin",
     ] {
-        let path = std::path::PathBuf::from(fallback);
+        let path = PathBuf::from(fallback);
         if !directories.contains(&path) {
             directories.push(path);
         }
@@ -184,10 +214,9 @@ fn is_executable(candidate: &std::path::Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        candidate.is_file()
-            && std::fs::metadata(candidate)
-                .map(|m| m.permissions().mode() & 0o111 != 0)
-                .unwrap_or(false)
+        std::fs::metadata(candidate)
+            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
     }
     #[cfg(not(unix))]
     {
@@ -206,6 +235,13 @@ pub struct Target {
 impl Target {
     pub fn is_available(&self) -> bool {
         self.reason.is_none()
+    }
+
+    /// True when nothing except a missing source blocks this target, i.e.
+    /// the tools it needs are installed. `convert --list` without files uses
+    /// it, because there is no source kind to check yet.
+    pub fn tools_ready(&self) -> bool {
+        matches!(self.reason.as_deref(), None | Some(NO_SOURCE_REASON))
     }
 }
 
@@ -427,7 +463,7 @@ fn availability(
     }
 
     let Some(ext) = ext else {
-        return Some("Drop a file first".into());
+        return Some(NO_SOURCE_REASON.into());
     };
 
     match category {

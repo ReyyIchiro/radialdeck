@@ -9,6 +9,7 @@
 //! on every operation and should not churn the config file or its backups.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -94,9 +95,38 @@ impl History {
         }
         let bytes = serde_json::to_vec_pretty(self)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        let temporary = path.with_extension("json.tmp");
-        fs::write(&temporary, bytes)?;
-        fs::rename(&temporary, path)
+
+        // Mirrors the config store: unique temp name, 0600, fsync file and
+        // directory, atomic rename. History holds the user's file paths, so
+        // it must not be world-readable or torn by a crash mid-write.
+        let mut temp_name = std::ffi::OsString::from("history");
+        temp_name.push(format!(".{}.tmp", std::process::id()));
+        let temp_path = path.with_file_name(temp_name);
+
+        let result = (|| -> std::io::Result<()> {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let file = options.open(&temp_path)?;
+            (&file).write_all(&bytes)?;
+            file.sync_all()?;
+            fs::rename(&temp_path, path)?;
+            if let Ok(dir) =
+                fs::File::open(path.parent().unwrap_or_else(|| std::path::Path::new(".")))
+            {
+                let _ = dir.sync_all();
+            }
+            Ok(())
+        })();
+
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+        result
     }
 
     /// Adds an entry at the front. Empty output lists are ignored so failed

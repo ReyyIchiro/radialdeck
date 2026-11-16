@@ -79,6 +79,8 @@ pub struct Progress {
     /// Files finished so far, starting at 1 for the first result.
     pub done: usize,
     pub total: usize,
+    /// Files that failed so far in this batch.
+    pub failed: usize,
     /// Name of the file being processed.
     pub current: String,
     /// Latest line from the child process, when it emits one.
@@ -112,6 +114,8 @@ struct State {
     /// Paths created by this operation, for cleanup after a cancel.
     registered: Vec<PathBuf>,
     total: usize,
+    done: usize,
+    failed: usize,
 }
 
 thread_local! {
@@ -133,6 +137,8 @@ pub fn scope<T>(
             reporter: None,
             registered: Vec::new(),
             total: 0,
+            done: 0,
+            failed: 0,
         });
     });
     let result = body();
@@ -151,11 +157,13 @@ pub fn set_reporter(reporter: Reporter) {
     });
 }
 
-/// Declares how many files the current batch contains.
+/// Declares how many files the current batch contains; resets the counters.
 pub fn set_total(total: usize) {
     STATE.with(|state| {
         if let Some(state) = state.borrow_mut().as_mut() {
             state.total = total;
+            state.done = 0;
+            state.failed = 0;
         }
     });
 }
@@ -181,17 +189,44 @@ pub fn report_file(current: &Path) {
         let Some(reporter) = state.reporter.clone() else {
             return;
         };
-        let name = current
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| current.display().to_string());
+        state.done += 1;
         reporter(Progress {
-            done: 1,
+            done: state.done,
             total: state.total.max(1),
-            current: name,
+            failed: state.failed,
+            current: file_label(current),
             detail: None,
         });
     });
+}
+
+/// Counts one failed file so the UI can show "2 / 5 · 1 failed" while the
+/// rest of the batch continues.
+pub fn report_failure(current: &Path) {
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let Some(state) = state.as_mut() else {
+            return;
+        };
+        let Some(reporter) = state.reporter.clone() else {
+            return;
+        };
+        state.failed += 1;
+        reporter(Progress {
+            done: state.done,
+            total: state.total.max(1),
+            failed: state.failed,
+            current: file_label(current),
+            detail: None,
+        });
+    });
+}
+
+fn file_label(current: &Path) -> String {
+    current
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| current.display().to_string())
 }
 
 /// Forwards a line of child-process output. FFmpeg writes live statistics to
@@ -210,8 +245,9 @@ pub fn report_detail(line: &str) {
             return;
         }
         reporter(Progress {
-            done: 0,
+            done: state.done,
             total: state.total.max(1),
+            failed: state.failed,
             current: String::new(),
             detail: Some(trimmed.chars().take(160).collect()),
         });

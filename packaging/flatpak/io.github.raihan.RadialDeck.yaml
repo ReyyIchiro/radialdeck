@@ -57,6 +57,7 @@ modules:
           /app/share/applications/io.github.raihan.RadialDeck.desktop
       - install -Dm644 packaging/io.github.raihan.RadialDeck.svg
           /app/share/icons/hicolor/scalable/apps/io.github.raihan.RadialDeck.svg
+      - install -Dm644 LICENSE /app/share/licenses/radial-deck/LICENSE
     sources:
       - type: dir
         path: ../..

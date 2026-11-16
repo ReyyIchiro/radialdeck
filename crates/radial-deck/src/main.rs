@@ -66,11 +66,6 @@ fn main() -> gtk::glib::ExitCode {
         };
     }
 
-    let _log_guard = logging::init();
-    if let Some(dir) = logging::log_dir() {
-        tracing::debug!("log directory: {}", dir.display());
-    }
-
     let args: Vec<String> = std::env::args().collect();
     let cli = controller::Cli::parse(args.iter().skip(1).cloned());
 
@@ -82,6 +77,19 @@ fn main() -> gtk::glib::ExitCode {
         println!("radial-deck {}", env!("CARGO_PKG_VERSION"));
         return gtk::glib::ExitCode::SUCCESS;
     }
+
+    let _log_guard = logging::init();
+    if let Some(dir) = logging::log_dir() {
+        tracing::debug!("log directory: {}", dir.display());
+    }
+
+    // A crash must reach the daily log: autostart has no stderr, and a silent
+    // death also takes the tray and both global hotkeys with it.
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("panic: {info}");
+        default_panic_hook(info);
+    }));
 
     let app = gtk::Application::builder().application_id(APP_ID).build();
     app.set_flags(gtk::gio::ApplicationFlags::HANDLES_COMMAND_LINE);
@@ -117,9 +125,5 @@ fn main() -> gtk::glib::ExitCode {
         });
     }
 
-    if args.is_empty() {
-        app.run()
-    } else {
-        app.run_with_args(&args)
-    }
+    app.run_with_args(&args)
 }

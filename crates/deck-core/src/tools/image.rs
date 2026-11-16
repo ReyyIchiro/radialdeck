@@ -8,7 +8,7 @@ use super::shell::{
     extension, image_dimensions, magick_command, parse_u32, require, run, source_parent,
     source_stem, unique_path, ToolResult,
 };
-use super::{quality, value, ToolFailure, ToolId, ToolOutcome};
+use super::{each, quality, value, ToolId, ToolOutcome};
 
 pub fn execute(id: ToolId, sources: &[PathBuf], values: &BTreeMap<String, String>) -> ToolOutcome {
     match id {
@@ -29,32 +29,6 @@ pub fn execute(id: ToolId, sources: &[PathBuf], values: &BTreeMap<String, String
             "unsupported image tool".to_owned(),
         ),
     }
-}
-
-fn each<F>(sources: &[PathBuf], mut operation: F) -> ToolOutcome
-where
-    F: FnMut(&Path) -> ToolResult<Vec<PathBuf>>,
-{
-    let mut outcome = ToolOutcome::default();
-    crate::job::set_total(sources.len());
-    for source in sources {
-        if crate::job::cancelled() {
-            outcome.failures.push(ToolFailure {
-                source: source.clone(),
-                message: "Cancelled".into(),
-            });
-            break;
-        }
-        match operation(source) {
-            Ok(created) => outcome.created.extend(created),
-            Err(message) => outcome.failures.push(ToolFailure {
-                source: source.clone(),
-                message,
-            }),
-        }
-        crate::job::report_file(source);
-    }
-    outcome
 }
 
 fn create_pdf(sources: &[PathBuf]) -> ToolOutcome {
@@ -100,7 +74,7 @@ fn create_collage(sources: &[PathBuf], values: &BTreeMap<String, String>) -> Too
         Err(message) => return ToolOutcome::failure(first, message),
     };
     let destination = unique_path(&source_parent(first), "collage", "jpg");
-    let montage = match require("montage") {
+    let montage = match require(crate::binaries::MONTAGE) {
         Ok(binary) => binary,
         Err(message) => return ToolOutcome::failure(first, message),
     };

@@ -20,6 +20,8 @@ type ActionSlot = Rc<RefCell<Option<ActionHandler>>>;
 pub struct WheelFolder {
     pub id: Uuid,
     pub label: String,
+    /// Absolute location; the search ranking also matches against it.
+    pub path: std::path::PathBuf,
     pub color: Option<String>,
     pub availability: Availability,
 }
@@ -40,6 +42,9 @@ pub struct WheelData {
     pub shortcut: String,
     pub folders: Vec<WheelFolder>,
     pub projects: Vec<ProjectTab>,
+    /// One-line instruction replacing the caption while the wheel is in
+    /// picker mode (e.g. To Project): choosing a folder moves staged files.
+    pub banner: Option<String>,
 }
 
 impl Default for WheelData {
@@ -51,6 +56,7 @@ impl Default for WheelData {
             shortcut: "CTRL+ALT+Q".into(),
             folders: Vec::new(),
             projects: Vec::new(),
+            banner: None,
         }
     }
 }
@@ -82,20 +88,24 @@ struct State {
 
 impl State {
     fn rebuild(&mut self) {
-        let query = self.query.trim().to_lowercase();
-        self.filtered = self
+        // Shared ranking from deck-core: label prefix first, then label, then
+        // path, so a query matches a folder's location too, not only its name.
+        let mut ranked: Vec<(u8, usize)> = self
             .data
             .folders
             .iter()
             .enumerate()
             .filter_map(|(index, folder)| {
-                if query.is_empty() {
-                    return Some(index);
-                }
-                let label = folder.label.to_lowercase();
-                label.contains(&query).then_some(index)
+                deck_core::search::match_rank(
+                    &folder.label,
+                    &folder.path.to_string_lossy(),
+                    &self.query,
+                )
+                .map(|rank| (rank, index))
             })
             .collect();
+        ranked.sort_by_key(|(rank, index)| (*rank, *index));
+        self.filtered = ranked.into_iter().map(|(_, index)| index).collect();
         if self
             .selected
             .is_some_and(|index| index >= self.filtered.len())
@@ -148,12 +158,17 @@ enum Hit {
     Outside,
 }
 
+/// Pointer slop beyond the drawn ring: a click/hover a few pixels outside
+/// the outer edge still selects the sector under it, so near-misses on the
+/// rim do not fall through to the dismiss scrim. Mirrors `action_wheel`.
+pub(crate) const EDGE_PAD: f64 = 6.0;
+
 fn hit_test(geo: &Geometry, state: &State, x: f64, y: f64) -> Hit {
     let dx = x - geo.cx;
     let dy = y - geo.cy;
     let distance = (dx * dx + dy * dy).sqrt();
     if state.filtered.len() == 1 {
-        return if distance <= geo.outer {
+        return if distance <= geo.outer + EDGE_PAD {
             Hit::Sector(0)
         } else {
             Hit::Outside
@@ -164,7 +179,7 @@ fn hit_test(geo: &Geometry, state: &State, x: f64, y: f64) -> Hit {
         return Hit::Center;
     }
 
-    if distance > geo.inner && distance <= geo.outer && !state.filtered.is_empty() {
+    if distance > geo.inner && distance <= geo.outer + EDGE_PAD && !state.filtered.is_empty() {
         let step = TAU / state.filtered.len() as f64;
         // Wedges are centred on the top; shift the pointer angle by half a
         // step so sector 0 covers the top wedge instead of starting at its
@@ -868,7 +883,9 @@ fn draw_caption(
         .and_then(|position| state.filtered.get(position))
         .and_then(|index| state.data.folders.get(*index));
 
-    let (label, color) = if !state.query.is_empty() {
+    let (label, color) = if let Some(banner) = state.data.banner.as_deref() {
+        (banner.to_string(), muted)
+    } else if !state.query.is_empty() {
         (
             format!(
                 "{count} match{} · click center clears",
@@ -914,7 +931,8 @@ fn draw_focus(cr: &gtk::cairo::Context, geo: &Geometry, state: &State) {
     }
     cr.new_path();
     cr.arc(geo.cx, geo.cy, geo.outer + 7.0, 0.0, TAU);
-    cr.set_source_rgba(1.0, 0.353, 0.0, 0.9);
+    let (ar, ag, ab) = crate::theme::accent();
+    cr.set_source_rgba(ar, ag, ab, 0.9);
     cr.set_line_width(2.0);
     let _ = cr.stroke();
 }
@@ -940,6 +958,26 @@ fn wedge(cr: &gtk::cairo::Context, cx: f64, cy: f64, inner: f64, outer: f64, sta
     cr.close_path();
 }
 
+thread_local! {
+    /// One reusable Pango layout for every label in both wheels. All drawing
+    /// runs on the main thread; reusing the layout avoids building a fresh
+    /// PangoLayout (and a font lookup) for each label on each frame. Every
+    /// caller must fully specify text, font and wrapping before use, so no
+    /// state leaks between labels.
+    static LAYOUT: std::cell::RefCell<Option<pango::Layout>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Returns the shared scratch layout. The clone is a reference-count bump;
+/// callers configure it completely before measuring or showing it.
+pub(crate) fn scratch_layout(cr: &gtk::cairo::Context) -> pango::Layout {
+    LAYOUT.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        slot.get_or_insert_with(|| pangocairo::create_layout(cr))
+            .clone()
+    })
+}
+
 fn text_layout(
     cr: &gtk::cairo::Context,
     value: &str,
@@ -947,11 +985,12 @@ fn text_layout(
     max_width: f64,
     bold: bool,
 ) -> pango::Layout {
-    let layout = pangocairo::create_layout(cr);
+    let layout = scratch_layout(cr);
     let mut description = pango::FontDescription::from_string(&format!("Sans {size}"));
     if bold {
         description.set_weight(pango::Weight::Semibold);
     }
+    layout.set_attributes(Some(&pango::AttrList::new()));
     layout.set_font_description(Some(&description));
     layout.set_text(value);
     layout.set_width((max_width.max(1.0) * pango::SCALE as f64) as i32);
@@ -1065,6 +1104,22 @@ mod tests {
         assert_eq!(hit_test(&geo, &state, geo.cx, geo.cy), Hit::Center);
         assert_eq!(
             hit_test(&geo, &state, geo.cx, geo.cy + geo.outer + 10.0),
+            Hit::Outside
+        );
+    }
+
+    #[test]
+    fn rim_near_misses_still_hit_the_sector() {
+        let geo = geometry();
+        let state = state(4);
+        // A few pixels past the drawn ring, straight above the top wedge.
+        assert_eq!(
+            hit_test(&geo, &state, geo.cx, geo.cy - (geo.outer + 3.0)),
+            Hit::Sector(0)
+        );
+        // Past the forgiveness band the click belongs to the scrim.
+        assert_eq!(
+            hit_test(&geo, &state, geo.cx, geo.cy - (geo.outer + EDGE_PAD + 4.0)),
             Hit::Outside
         );
     }

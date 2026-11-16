@@ -9,14 +9,15 @@ use std::process::Command;
 use super::output::{unique_named, unique_path};
 use super::registry::find_tool;
 use super::ConvertError;
+use crate::binaries;
 
 fn run(command: &mut Command, label: &str) -> Result<(), ConvertError> {
     crate::tools::run_command(command, label).map_err(ConvertError)
 }
 
 fn magick_bin() -> Result<PathBuf, ConvertError> {
-    find_tool("magick")
-        .or_else(|| find_tool("convert"))
+    find_tool(binaries::IMAGEMAGICK)
+        .or_else(|| find_tool(binaries::CONVERT))
         .ok_or_else(|| ConvertError("ImageMagick is not installed".into()))
 }
 
@@ -86,7 +87,7 @@ pub fn ffmpeg_convert(source: &Path, target_extension: &str) -> Result<Vec<PathB
         target_extension,
     );
     run(
-        Command::new(require_tool("ffmpeg")?)
+        Command::new(require_tool(binaries::FFMPEG)?)
             .arg("-nostdin")
             .arg("-y")
             .arg("-loglevel")
@@ -94,7 +95,7 @@ pub fn ffmpeg_convert(source: &Path, target_extension: &str) -> Result<Vec<PathB
             .arg("-i")
             .arg(source)
             .arg(&destination),
-        "ffmpeg",
+        binaries::FFMPEG,
     )?;
     Ok(vec![destination])
 }
@@ -118,7 +119,7 @@ fn rasterize(
     let temp =
         tempfile::tempdir().map_err(|error| ConvertError(format!("create temp dir: {error}")))?;
     let prefix = temp.path().join("page");
-    let mut command = Command::new(require_tool("pdftoppm")?);
+    let mut command = Command::new(require_tool(binaries::PDFTOPPM)?);
     command.arg("-r").arg("300");
     match target_extension {
         "png" => {
@@ -130,7 +131,7 @@ fn rasterize(
         other => return Err(ConvertError(format!("unsupported raster format: {other}"))),
     }
     command.arg(pdf).arg(&prefix);
-    run(&mut command, "pdftoppm")?;
+    run(&mut command, binaries::PDFTOPPM)?;
 
     let mut pages: Vec<(u32, PathBuf)> = std::fs::read_dir(temp.path())
         .map_err(|error| ConvertError(format!("read temp dir: {error}")))?
@@ -175,11 +176,11 @@ pub fn pdf_text(source: &Path, target_extension: &str) -> Result<Vec<PathBuf>, C
         tempfile::tempdir().map_err(|error| ConvertError(format!("create temp dir: {error}")))?;
     let raw = temp.path().join("text.txt");
     run(
-        Command::new(require_tool("pdftotext")?)
+        Command::new(require_tool(binaries::PDFTOTEXT)?)
             .arg("-layout")
             .arg(source)
             .arg(&raw),
-        "pdftotext",
+        binaries::PDFTOTEXT,
     )?;
     let destination = unique_path(
         &source_parent(source),
@@ -196,7 +197,7 @@ pub fn pdf_text(source: &Path, target_extension: &str) -> Result<Vec<PathBuf>, C
 /// Converts a document to Markdown through pandoc, which understands ODT,
 /// DOCX, RTF, HTML and EPUB inputs.
 pub fn pandoc_to_markdown(source: &Path) -> Result<Vec<PathBuf>, ConvertError> {
-    let binary = require_tool("pandoc")?;
+    let binary = require_tool(binaries::PANDOC)?;
     let destination = unique_path(&source_parent(source), &source_stem(source), "md");
     run(
         Command::new(binary)
@@ -205,7 +206,7 @@ pub fn pandoc_to_markdown(source: &Path) -> Result<Vec<PathBuf>, ConvertError> {
             .arg("--output")
             .arg(&destination)
             .arg(source),
-        "pandoc",
+        binaries::PANDOC,
     )?;
     Ok(vec![destination])
 }
@@ -220,8 +221,8 @@ pub fn libreoffice_convert(
     let profile =
         tempfile::tempdir().map_err(|error| ConvertError(format!("create temp dir: {error}")))?;
     let profile_url = format!("file://{}", profile.path().to_string_lossy());
-    let binary = find_tool("soffice")
-        .or_else(|| find_tool("libreoffice"))
+    let binary = find_tool(binaries::SOFFICE)
+        .or_else(|| find_tool(binaries::LIBREOFFICE))
         .ok_or_else(|| ConvertError("LibreOffice is not installed".into()))?;
 
     let mut command = Command::new(binary);

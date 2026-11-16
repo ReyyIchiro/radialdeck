@@ -206,15 +206,21 @@ impl Config {
     /// schema at least 1, at least one project, unique project/folder ids,
     /// valid colors, absolute folder paths, and a valid active project.
     /// Returns human-readable notes about anything that was repaired.
+    ///
+    /// A schema newer than this build is never rewritten down: the version
+    /// stays untouched so a later save still carries the true number and the
+    /// store refuses it with a clear message instead of silently degrading
+    /// the user's data.
     pub fn normalize(&mut self) -> Vec<String> {
-        let previous_schema = self.schema;
         let mut notes = Vec::new();
         if self.schema > SCHEMA_VERSION {
             notes.push(format!(
                 "config schema {} is newer than supported schema {SCHEMA_VERSION}",
                 self.schema
             ));
+            return notes;
         }
+        let previous_schema = self.schema;
         self.schema = SCHEMA_VERSION;
 
         if self.preferences.hotkey.trim().is_empty() {
@@ -470,9 +476,22 @@ mod tests {
     }
 
     #[test]
-    fn normalize_repairs_hand_edited_files() {
+    fn newer_schema_is_never_written_down() {
         let mut config = Config {
             schema: 99,
+            ..Config::default()
+        };
+        let notes = config.normalize();
+        assert_eq!(config.schema, 99);
+        assert!(notes
+            .iter()
+            .any(|note| note.contains("newer than supported schema")));
+    }
+
+    #[test]
+    fn normalize_repairs_hand_edited_files() {
+        let mut config = Config {
+            schema: 0,
             active_project: Uuid::new_v4(),
             ..Config::default()
         };

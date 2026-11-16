@@ -17,8 +17,10 @@
 #   x11      - keyboard-driven flows: tool form submission, Float, Esc
 #   settings - the normal toplevel still maps in the nested session
 #   projects - the Projects page lists the folders of the active project
+#   output   - switching the output mode must not re-enter the config borrow
 #   dark     - the same window under the dark preference
 #   cli      - `radial-deck convert` runs without any display
+#   golden   - the three Cairo wheel renders match scripts/golden references
 #
 # Usage: scripts/ui-smoke.sh
 #
@@ -32,7 +34,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$ROOT/target/release/radial-deck"
+BIN="${RADIAL_DECK_BIN:-$ROOT/target/release/radial-deck}"
 OUT="${RADIAL_DECK_SMOKE_OUT:-${TMPDIR:-/tmp}/radial-deck-ui-smoke}"
 
 FAILURES=0
@@ -210,6 +212,40 @@ drawn_pixels() {
     magick "$OUT/shots/$1.png" -colorspace gray -threshold 12% -format '%[fx:mean*w*h]' info:
 }
 
+# Golden-image comparison for the Cairo wheel renders. References live in
+# scripts/golden; set RADIAL_DECK_GOLDEN_REGEN=1 to overwrite them with the
+# current render after an intentional visual change. A 3% per-channel fuzz
+# absorbs antialiasing differences between freetype builds, and up to 0.2%
+# mismatched pixels are tolerated; anything beyond that is a real regression
+# in the hand-drawn wheel geometry that text checks cannot see.
+GOLDEN_DIR="${RADIAL_DECK_GOLDEN_DIR:-$ROOT/scripts/golden}"
+golden() {
+    local name="$1"
+    local shot="$OUT/shots/$name.png"
+    local ref="$GOLDEN_DIR/$name.png"
+    if [[ ! -s "$shot" ]]; then fail "golden: $name screenshot missing"; return; fi
+    if [[ "${RADIAL_DECK_GOLDEN_REGEN:-0}" == "1" || ! -s "$ref" ]]; then
+        mkdir -p "$GOLDEN_DIR"
+        if cp "$shot" "$ref"; then
+            pass "golden: $name reference written (bootstrap)"
+        else
+            fail "golden: $name reference write failed"
+        fi
+        return
+    fi
+    local ae
+    ae="$(compare -metric AE -fuzz 3% "$ref" "$shot" null: 2>&1 | awk '{print $1}' | cut -d. -f1)"
+    local dimensions allowed
+    dimensions="$(magick identify -format '%w %h' "$ref" 2>/dev/null)"
+    if [[ -z "$dimensions" ]]; then fail "golden: $name reference unreadable"; return; fi
+    allowed=$(( $(echo "$dimensions" | awk '{print $1 * $2}') / 500 ))
+    if (( ${ae:-999999999} <= allowed )); then
+        pass "golden: $name matches (AE=${ae:-0} <= $allowed)"
+    else
+        fail "golden: $name differs (AE=$ae > $allowed); regen with RADIAL_DECK_GOLDEN_REGEN=1"
+    fi
+}
+
 log_clean() { ! grep -qE 'assertion .* failed|init_layer_shell' "$APP_LOG"; }
 app_alive() { kill -0 "$APP_PID" 2>/dev/null; }
 
@@ -234,11 +270,19 @@ start_compositor || exit 1
 # real WAYLAND_DISPLAY would make captures silently target a socket that does
 # not exist under this private XDG_RUNTIME_DIR.
 export WAYLAND_DISPLAY=wayland-rdtest DISPLAY="$NESTED_DISPLAY"
+# Golden references were captured with the built-in orange; pin the accent so
+# a KDE accent colour on the host cannot produce phantom visual failures.
+export RADIAL_DECK_FORCE_ACCENT='#ff5a00'
 say "nested session: WAYLAND_DISPLAY=$WAYLAND_DISPLAY DISPLAY=$DISPLAY"
 
 # --- lane 1: layer-shell overlay on Wayland ---------------------------------
 cp "$ROOT/target/smoke/photo.png" "$OUT/work/photo.png" 2>/dev/null ||
     magick -size 96x64 gradient:navy-orange "$OUT/work/photo.png"
+
+start_app wayland --convert "$OUT/work/photo.png"
+check "wayland: convert overlay process stays alive" app_alive
+shoot convert
+golden convert
 
 start_app wayland --actions "$OUT/work/photo.png"
 check "wayland: overlay process stays alive" app_alive
@@ -248,11 +292,13 @@ sleep 0.5
 actions_pixels="$(drawn_pixels actions)"
 check "wayland: actions overlay draws on the virtual output" \
     test "${actions_pixels%.*}" -gt 20000
+golden actions
 
 start_app wayland --tools "$OUT/work/photo.png"
 shoot tools
 sleep 0.5
 check "wayland: tools wheel draws" test "$(drawn_pixels tools | cut -d. -f1)" -gt 20000
+golden tools
 check "wayland: tools and actions differ" \
     bash -c "[[ -s '$OUT/shots/actions.png' && -s '$OUT/shots/tools.png' ]] && \
         ! compare -metric AE '$OUT/shots/actions.png' '$OUT/shots/tools.png' null: 2>&1 | grep -qx '0'"
@@ -279,7 +325,7 @@ check "x11: no panic after a completed tool run" \
 
 start_app x11 --actions "$OUT/work/photo.png"
 check "x11: actions overlay is mapped" x11_focus
-send_key 6                    # wedge 6 is Float
+send_key 7                    # wedge 7 is Float (To Project is wedge 3)
 sleep 2
 shelf_window="$(xdotool search --onlyvisible --name '^Float$' | head -1)"
 check "x11: Float opens a shelf window" test -n "$shelf_window"
@@ -358,6 +404,15 @@ check "x11: settings survives page navigation" app_alive
 check "x11: no panic after page navigation" \
     bash -c "! grep -qE 'panicked|SIGABRT' '$APP_LOG'"
 
+# Dependencies page: commands must be copyable placeholders or a clear
+# unknown-manager hint; never empty for missing programs, and never panic.
+# Dependencies page: the rows and the install-command controls are rendered
+# from live detection, so the page must draw content and stay alive. A missing
+# manager still renders an explicit hint, never an empty command field.
+check "x11: settings Advanced renders dependency rows" \
+    test "$(drawn_pixels settings-advanced | cut -d. -f1)" -gt 20000
+check "x11: settings survives the Advanced dependency scan" app_alive
+
 # --- lane 5: seeded project list --------------------------------------------
 # The Projects page must show folders, not just counts. Seeding goes through
 # the config file because the Manage window's dialogs need a real portal.
@@ -390,7 +445,40 @@ check "x11: seeded project list is on the Projects page" \
 check "x11: project list renders its folders" \
     bash -c "! compare -metric AE '$OUT/shots/settings-projects.png' '$OUT/shots/settings-projects-seeded.png' null: 2>&1 | grep -qx '0'"
 
-# --- lane 6: dark theme -----------------------------------------------------
+# --- lane 6: output mode regression -----------------------------------------
+# Switching the Output dropdown used to hold a `Ref` from controller.config()
+# across set_output_location(), whose borrow_mut() then panicked with
+# "RefCell already borrowed" and killed the app. A crash here is the bug.
+#
+# Tab has to leave the sidebar first: GtkListBox treats Tab as "next row", so
+# the page controls used to be unreachable by keyboard. Space opens the
+# dropdown popover, Down picks the second entry, Return commits it.
+start_app x11 --settings
+check "x11: output lane window is mapped" x11_focus
+sleep 1
+for _ in 1 2 3 4; do send_key Down; done   # General -> Shortcuts -> Projects -> Tools -> Output
+sleep 1
+send_key Tab
+sleep 0.4
+shoot output-before-pick
+send_key space
+sleep 0.8
+send_key Down
+sleep 0.4
+send_key Return
+sleep 1.2
+shoot output-after-pick
+check "x11: output mode switch keeps the app alive" app_alive
+check "x11: output mode switch does not panic" \
+    bash -c "! grep -qE 'already borrowed|panicked' '$APP_LOG'"
+check "x11: output mode switch persists" \
+    bash -c "grep -q '\"output_location\": *{' '$XDG_CONFIG_HOME/radial-deck/config.json'"
+# The dropdown label must actually change on screen: the config write alone
+# would still pass if the widget redrew nothing.
+check "x11: output mode dropdown shows the new choice" \
+    bash -c "! compare -metric AE '$OUT/shots/output-before-pick.png' '$OUT/shots/output-after-pick.png' null: 2>&1 | grep -qx '0'"
+
+# --- lane 7: dark theme -----------------------------------------------------
 # The settings CSS mixes theme colours (@theme_fg_color) with translucent
 # overlays, so both variants must resolve; a light-only check would miss a
 # white-on-white regression.
@@ -405,7 +493,7 @@ check "x11: no panic in dark theme" \
     bash -c "! grep -qE 'panicked|SIGABRT' '$APP_LOG'"
 sed -i 's/"theme": "dark"/"theme": "system"/' "$XDG_CONFIG_HOME/radial-deck/config.json"
 
-# --- lane 7: headless batch converter --------------------------------------
+# --- lane 8: headless batch converter --------------------------------------
 # The CLI path must not need GTK at all: it runs here with the same private
 # environment but is a separate process, so a GTK init regression would hang
 # or fail the exit status.

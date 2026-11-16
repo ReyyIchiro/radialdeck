@@ -3,12 +3,13 @@ members = ["crates/deck-core", "crates/radial-deck"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-authors = ["Raihan <raihan@localhost>"]
-repository = "https://github.com/raihan/radial-deck"
+# No personal email: security reports go to GitHub private advisories.
+authors = ["RadialDeck contributors"]
+repository = "https://github.com/ReyyIchiro/radialdeck"
 
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }

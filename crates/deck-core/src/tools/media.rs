@@ -10,7 +10,7 @@ use super::shell::{
     parse_seconds, parse_u32, require, run, source_parent, source_stem, unique_dir, unique_path,
     ToolResult,
 };
-use super::{quality, seconds, value, ToolFailure, ToolId, ToolOutcome};
+use super::{each, quality, seconds, value, ToolId, ToolOutcome};
 use crate::Category;
 
 pub fn execute(
@@ -47,32 +47,6 @@ pub fn execute(
             "unsupported audio/video tool".to_owned(),
         ),
     }
-}
-
-fn each<F>(sources: &[PathBuf], mut operation: F) -> ToolOutcome
-where
-    F: FnMut(&Path) -> ToolResult<Vec<PathBuf>>,
-{
-    let mut outcome = ToolOutcome::default();
-    crate::job::set_total(sources.len());
-    for source in sources {
-        if crate::job::cancelled() {
-            outcome.failures.push(ToolFailure {
-                source: source.clone(),
-                message: "Cancelled".into(),
-            });
-            break;
-        }
-        match operation(source) {
-            Ok(created) => outcome.created.extend(created),
-            Err(message) => outcome.failures.push(ToolFailure {
-                source: source.clone(),
-                message,
-            }),
-        }
-        crate::job::report_file(source);
-    }
-    outcome
 }
 
 fn ffmpeg() -> ToolResult<Command> {

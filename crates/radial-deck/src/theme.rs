@@ -60,6 +60,53 @@ window.rd-dialog {
 .rd-progress-title {
     font-weight: 600;
 }
+.rd-progress-head {
+    spacing: 8px;
+}
+.rd-progress-count {
+    font-family: monospace;
+    font-size: 11px;
+    opacity: 0.62;
+}
+.rd-progress-failed {
+    font-size: 11px;
+}
+.rd-progress-bar trough {
+    background: alpha(currentColor, 0.12);
+    border: none;
+    border-radius: 4px;
+    min-height: 6px;
+}
+.rd-progress-bar progress {
+    border: none;
+    border-radius: 4px;
+    min-height: 6px;
+    box-shadow: none;
+}
+/* Fill colours are per theme so the bar clears 3:1 against its trough. */
+.rd-progress-window.rd-theme-light .rd-progress-bar progress {
+    background: #d44900;
+}
+.rd-progress-window.rd-theme-dark .rd-progress-bar progress {
+    background: #ff5a00;
+}
+.rd-progress-cancel {
+    background: transparent;
+    border: 1px solid alpha(currentColor, 0.16);
+    border-radius: 9px;
+    padding: 3px 14px;
+    min-height: 26px;
+    font-size: 12px;
+    font-weight: 600;
+    color: inherit;
+    box-shadow: none;
+}
+.rd-progress-cancel:hover {
+    background: alpha(currentColor, 0.07);
+}
+.rd-progress-cancel:active {
+    background: alpha(currentColor, 0.12);
+}
 .rd-card {
     border-radius: 10px;
     padding: 12px;
@@ -173,7 +220,7 @@ window.rd-action-overlay {
 .rd-mode.active {
     background: rgba(255, 90, 0, 0.14);
     border-color: #ff5a00;
-    color: #d9480f;
+    color: #bf4000;
 }
 .rd-panel-dark .rd-mode.active {
     color: #ff9a62;
@@ -231,7 +278,8 @@ window.rd-action-overlay {
 .rd-rail-action:focus,
 .rd-tab-add:focus,
 .rd-menu-item:focus {
-    border-color: rgba(245, 245, 247, 0.85);
+    /* currentColor adapts to panel/popover theme; 55% clears 3:1 in both. */
+    border-color: alpha(currentColor, 0.55);
 }
 .rd-tab-label {
     font-size: 11px;
@@ -276,7 +324,7 @@ window.rd-action-overlay {
 .rd-key-label {
     font-size: 11px;
     font-weight: 700;
-    color: #d9480f;
+    color: #bf4000;
 }
 .rd-panel-dark .rd-key-label {
     color: #ff8a4c;
@@ -413,6 +461,15 @@ pub fn install_css() {
             &provider,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+        // Accent rules sit one level above the static sheet so a KDE accent
+        // colour can override the built-in orange without touching it.
+        let accent_provider = CssProvider::new();
+        accent_provider.load_from_string(&accent_css());
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &accent_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
     }
 }
 
@@ -493,4 +550,202 @@ pub fn parse_hex(color: &str) -> (f64, f64, f64) {
         ((parsed >> 8) & 0xff) as f64 / 255.0,
         (parsed & 0xff) as f64 / 255.0,
     )
+}
+
+/// The app accent: the KDE accent colour when the user picked one in System
+/// Settings, else the RadialDeck orange. Read once per process; changing the
+/// system accent takes effect on the next start.
+pub fn accent() -> (f64, f64, f64) {
+    static ACCENT: std::sync::OnceLock<(f64, f64, f64)> = std::sync::OnceLock::new();
+    *ACCENT.get_or_init(|| {
+        if let Some(forced) = std::env::var_os("RADIAL_DECK_FORCE_ACCENT") {
+            if let Some(color) = parse_rgb_list(&forced.to_string_lossy()) {
+                return color;
+            }
+        }
+        read_kde_accent().unwrap_or((1.0, 0.353, 0.0)) // #ff5a00
+    })
+}
+
+/// `AccentColor=r,g,b` from kdeglobals (Plasma 6), ignoring malformed or
+/// absent values. Same file and fallback style as `kde_dark_scheme`.
+fn read_kde_accent() -> Option<(f64, f64, f64)> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+        })?;
+    let text = std::fs::read_to_string(base.join("kdeglobals")).ok()?;
+    text.lines()
+        .find_map(|line| line.strip_prefix("AccentColor="))
+        .and_then(parse_rgb_list)
+}
+
+/// Parses a `r,g,b[,a]` list of 0-255 integers, as Plasma stores accents.
+fn parse_rgb_list(value: &str) -> Option<(f64, f64, f64)> {
+    let mut channels = value.split(',').map(str::trim).map(str::parse::<u32>);
+    let r = channels.next()?.ok()?;
+    let g = channels.next()?.ok()?;
+    let b = channels.next()?.ok()?;
+    if r.max(g).max(b) > 255 {
+        return None;
+    }
+    Some((
+        f64::from(r) / 255.0,
+        f64::from(g) / 255.0,
+        f64::from(b) / 255.0,
+    ))
+}
+
+fn relative_luminance(color: (f64, f64, f64)) -> f64 {
+    fn channel(value: f64) -> f64 {
+        if value <= 0.03928 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * channel(color.0) + 0.7152 * channel(color.1) + 0.0722 * channel(color.2)
+}
+
+fn contrast(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
+    let (light, dark) = if relative_luminance(a) >= relative_luminance(b) {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    (relative_luminance(light) + 0.05) / (relative_luminance(dark) + 0.05)
+}
+
+/// Nudges `color` toward black or white until it clears `target` contrast
+/// against `against`, in 5% steps. Keeps accent-derived fills and text inside
+/// WCAG without banning vivid accent choices outright.
+fn scale_until_contrast(
+    color: (f64, f64, f64),
+    against: (f64, f64, f64),
+    target: f64,
+    darken: bool,
+) -> (f64, f64, f64) {
+    let mut current = color;
+    for _ in 0..40 {
+        if contrast(current, against) >= target {
+            return current;
+        }
+        let factor = if darken { 0.95 } else { 1.05 };
+        current = (
+            (current.0 * factor).clamp(0.0, 1.0),
+            (current.1 * factor).clamp(0.0, 1.0),
+            (current.2 * factor).clamp(0.0, 1.0),
+        );
+    }
+    current
+}
+
+fn hex(color: (f64, f64, f64)) -> String {
+    let byte = |value: f64| (value * 255.0).round().clamp(0.0, 255.0) as u8;
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        byte(color.0),
+        byte(color.1),
+        byte(color.2)
+    )
+}
+
+/// Overrides for every accent-coloured rule, derived from one accent colour
+/// with contrast computed instead of assumed. Trough colours mirror the
+/// `.rd-progress-bar trough` blend over each panel background.
+fn accent_css() -> String {
+    let accent = accent();
+    let panel_light = (0.984, 0.980, 0.976); // #fbfaf9
+    let panel_dark = (0.106, 0.106, 0.122); // #1b1b1f
+    let trough_light = (0.878, 0.870, 0.867); // currentColor 12% over the panel
+    let trough_dark = (0.208, 0.207, 0.216);
+    let on_accent = if relative_luminance(accent) > 0.35 {
+        "#111111"
+    } else {
+        "#ffffff"
+    };
+    let fill_light = hex(scale_until_contrast(accent, trough_light, 3.0, true));
+    let fill_dark = hex(scale_until_contrast(accent, trough_dark, 3.0, false));
+    let text_light = hex(scale_until_contrast(accent, panel_light, 4.5, true));
+    let text_dark = hex(scale_until_contrast(accent, panel_dark, 4.5, false));
+    let hover = hex(scale_until_contrast(accent, panel_light, 1.15, true));
+    let a = hex(accent);
+    format!(
+        r#"
+.rd-mode.active {{
+    background: alpha({a}, 0.14);
+    border-color: {a};
+    color: {text_light};
+}}
+.rd-panel-dark .rd-mode.active {{
+    color: {text_dark};
+}}
+.rd-tab.active {{
+    background: alpha({a}, 0.10);
+    border-color: {a};
+}}
+.rd-form-run {{
+    background: {a};
+    color: {on_accent};
+}}
+.rd-form-run:hover {{
+    background: {hover};
+}}
+.rd-key {{
+    background: alpha({a}, 0.12);
+    border-color: alpha({a}, 0.22);
+}}
+.rd-key-label {{
+    color: {text_light};
+}}
+.rd-panel-dark .rd-key-label {{
+    color: {text_dark};
+}}
+.rd-panel.rd-drop-hot {{
+    border: 2px solid {a};
+}}
+.rd-progress-window.rd-theme-light .rd-progress-bar progress {{
+    background: {fill_light};
+}}
+.rd-progress-window.rd-theme-dark .rd-progress-bar progress {{
+    background: {fill_dark};
+}}
+"#
+    )
+}
+
+#[cfg(test)]
+mod accent_tests {
+    use super::*;
+
+    #[test]
+    fn parses_kde_accent_lists() {
+        assert_eq!(parse_rgb_list("255,90,0"), Some((1.0, 90.0 / 255.0, 0.0)));
+        assert_eq!(
+            parse_rgb_list("61, 129, 246, 255"),
+            Some((61.0 / 255.0, 129.0 / 255.0, 246.0 / 255.0))
+        );
+        assert_eq!(parse_rgb_list("300,0,0"), None);
+        assert_eq!(parse_rgb_list("red"), None);
+    }
+
+    #[test]
+    fn scaled_fills_clear_their_targets() {
+        let orange = (1.0, 0.353, 0.0);
+        let trough_light = (0.878, 0.870, 0.867);
+        let trough_dark = (0.208, 0.207, 0.216);
+        let fill_light = scale_until_contrast(orange, trough_light, 3.0, true);
+        let fill_dark = scale_until_contrast(orange, trough_dark, 3.0, false);
+        assert!(contrast(fill_light, trough_light) >= 3.0);
+        assert!(contrast(fill_dark, trough_dark) >= 3.0);
+    }
+
+    #[test]
+    fn on_accent_text_follows_luminance() {
+        // Dark accent gets white text; a near-white accent gets dark text.
+        let dark = (0.1, 0.1, 0.45);
+        assert!(relative_luminance(dark) <= 0.35);
+        assert!(relative_luminance((0.95, 0.95, 0.95)) > 0.35);
+    }
 }

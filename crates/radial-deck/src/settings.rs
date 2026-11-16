@@ -4,6 +4,7 @@ use std::rc::{Rc, Weak};
 use deck_core::convert::registry::Category;
 use deck_core::tools::ToolId;
 use deck_core::{OutputLocation, PackageManager, Theme};
+use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
@@ -251,6 +252,7 @@ impl SettingsWindow {
         tool_section.append(&tool_hint);
 
         // --- Advanced page --------------------------------------------------
+        // --- Advanced page --------------------------------------------------
         let dependencies = gtk::Box::new(gtk::Orientation::Vertical, 10);
         let dependency_summary = setting_subtitle("Checking installed programs…");
         let dependency_card = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -332,6 +334,35 @@ impl SettingsWindow {
         advanced.append(&card(dependency_card));
         advanced.append(&card(config_row));
         advanced.append(&card(log_row));
+
+        let support = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        support.append(&setting_title("Contact & support"));
+        support.append(&setting_subtitle(
+            "Report bugs or suggest improvements on GitHub. Include your RadialDeck version, desktop environment, and steps to reproduce. Review logs for personal information before sharing them.",
+        ));
+        for (uri, label) in [
+            (
+                "https://github.com/ReyyIchiro/radialdeck/issues",
+                "Report a bug or suggest a feature",
+            ),
+            (
+                "https://github.com/ReyyIchiro",
+                "Contact the maintainer on GitHub",
+            ),
+            (
+                "https://sociabuzz.com/atepp",
+                "Support development on Sociabuzz",
+            ),
+            (
+                "https://github.com/ReyyIchiro/radialdeck/blob/main/LICENSE",
+                "Read the MIT license",
+            ),
+        ] {
+            let link = gtk::LinkButton::with_label(uri, label);
+            link.set_halign(gtk::Align::Start);
+            support.append(&link);
+        }
+        advanced.append(&card(support));
         let footer = gtk::Label::new(Some(&format!(
             "RadialDeck {} · MIT · folders stay on this device",
             env!("CARGO_PKG_VERSION")
@@ -411,6 +442,28 @@ impl SettingsWindow {
         window.set_child(Some(&body));
 
         {
+            // GtkListBox turns Tab into "next row" instead of leaving the list,
+            // which traps keyboard users in the sidebar: the page controls can
+            // never be reached without a pointer. Catch Tab on the way in and
+            // hand focus to the visible page. `child_focus()` walks GTK's own
+            // focus chain, so it skips scrollers and labels and honours any
+            // later reordering of the page contents.
+            let stack = stack.clone();
+            let keys = gtk::EventControllerKey::new();
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+            keys.connect_key_pressed(move |_, key, _, _| {
+                if key != gdk::Key::Tab && key != gdk::Key::ISO_Left_Tab {
+                    return glib::Propagation::Proceed;
+                }
+                if let Some(page) = stack.visible_child() {
+                    page.child_focus(gtk::DirectionType::TabForward);
+                }
+                glib::Propagation::Stop
+            });
+            nav.add_controller(keys);
+        }
+
+        {
             let stack = stack.clone();
             nav.connect_row_selected(move |_, row| {
                 if let Some(row) = row {
@@ -464,6 +517,12 @@ impl SettingsWindow {
             &reset_tools,
         );
         settings.refresh();
+        // One dependency scan per window lifetime; the Recheck button rescan.
+        populate_dependencies(
+            &settings.dependencies,
+            &settings.dependency_summary,
+            &settings.window,
+        );
         settings
     }
 
@@ -613,11 +672,18 @@ impl SettingsWindow {
                 let Some(controller) = controller.upgrade() else {
                     return;
                 };
-                let current = controller.config().preferences.output_location.clone();
+                // Copy out of the RefCell before the match: every branch below
+                // mutates the same cell, and a live `Ref` would make that
+                // borrow_mut() panic with "already borrowed".
+                let (current, subfolder) = {
+                    let config = controller.config();
+                    (
+                        config.preferences.output_location.clone(),
+                        config.preferences.output_subfolder.clone(),
+                    )
+                };
                 match dropdown.selected() {
-                    1 => controller.set_output_location(OutputLocation::Subfolder(
-                        controller.config().preferences.output_subfolder.clone(),
-                    )),
+                    1 => controller.set_output_location(OutputLocation::Subfolder(subfolder)),
                     2 => {
                         let dialog = gtk::FileDialog::builder()
                             .title("Choose an output folder")
@@ -859,31 +925,35 @@ impl SettingsWindow {
             self.log_path.set_text("Unavailable");
         }
 
-        populate_dependencies(&self.dependencies, &self.dependency_summary, &self.window);
+        // Dependency rows are rebuilt when the window opens or the user asks
+        // for a recheck; config mutations do not change what is installed.
         theme::apply_theme(theme_pref);
         self.suppress.set(false);
     }
 }
 
-/// Rebuilds the dependency rows. Detection is cheap (a few `PATH` lookups),
-/// but it only runs when the window is refreshed or the user asks for it.
+/// Rebuilds the dependency rows. Each pass rescans the tool cache so a tool
+/// installed since the last check is picked up. Only package manager commands
+/// are shown for copying; RadialDeck never installs packages itself.
 fn populate_dependencies(rows: &gtk::Box, summary: &gtk::Label, window: &gtk::ApplicationWindow) {
+    deck_core::convert::registry::refresh_tool_cache();
     while let Some(child) = rows.first_child() {
         rows.remove(&child);
     }
 
     let statuses = deck_core::dependencies::statuses();
     let missing = deck_core::dependencies::missing(&statuses);
-    if missing.is_empty() {
-        summary.set_text("Every optional program is installed.");
+    summary.set_text(&if missing.is_empty() {
+        "All optional converters are installed.".into()
     } else {
-        summary.set_text(&format!(
-            "{} of {} programs are missing; affected tools are disabled.",
-            missing.len(),
-            statuses.len()
-        ));
-    }
-
+        format!(
+            "{} optional programs missing. Only their features are disabled.",
+            missing.len()
+        )
+    });
+    rows.append(&setting_subtitle(
+        "GTK and layer-shell are required by the application package. The converters below are optional; install only what you use.",
+    ));
     for status in &statuses {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -894,45 +964,80 @@ fn populate_dependencies(rows: &gtk::Box, summary: &gtk::Label, window: &gtk::Ap
         let badge = gtk::Label::new(Some(if status.available {
             "Installed"
         } else {
-            "Missing"
+            "Missing (optional)"
         }));
-        badge.add_css_class(if status.available {
-            "rd-badge"
-        } else {
-            "rd-badge-missing"
-        });
+        badge.add_css_class("rd-badge");
         row.append(&badge);
         rows.append(&row);
     }
 
-    if let Some(command) = PackageManager::detect().install_command(&missing) {
-        let install = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let entry = gtk::Entry::new();
-        entry.set_text(&command);
-        entry.set_editable(false);
-        entry.set_hexpand(true);
-        entry.add_css_class("rd-mono");
-        let copy = gtk::Button::with_label("Copy");
-        let window = window.clone();
-        let text = command.clone();
-        copy.connect_clicked(move |_| {
-            window.clipboard().set_text(&text);
-        });
-        install.append(&entry);
-        install.append(&copy);
-        rows.append(&install);
-        rows.append(&setting_subtitle(
-            "Run this in a terminal, then press Recheck. RadialDeck never installs packages itself.",
-        ));
-    }
-
-    let hint = gtk::Label::new(Some(
-        "Optional: Ghostscript for PDF compression, 7-Zip for extra archive formats, KDE Connect for sending files.",
+    let detected = PackageManager::detect();
+    let manager_pick = gtk::DropDown::from_strings(&[
+        "Automatic",
+        "Pacman (Arch/CachyOS)",
+        "Apt (Debian/Ubuntu)",
+        "Dnf (Fedora)",
+        "Zypper (openSUSE)",
+        "Other / unknown",
+    ]);
+    manager_pick.set_tooltip_text(Some("Package manager for the command below"));
+    rows.append(&shortcut_line(
+        "Package manager",
+        "Automatic uses the package manager detected on this device.",
+        &gtk::Label::new(None),
     ));
-    hint.add_css_class("rd-subtle");
-    hint.set_wrap(true);
-    hint.set_halign(gtk::Align::Start);
-    rows.append(&hint);
+    rows.append(&manager_pick);
+    let command_rows = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    rows.append(&command_rows);
+    let window_weak = window.downgrade();
+    let update: Rc<dyn Fn(u32)> = Rc::new(move |selected| {
+        let manager = match selected {
+            0 => detected,
+            1 => PackageManager::Pacman,
+            2 => PackageManager::Apt,
+            3 => PackageManager::Dnf,
+            4 => PackageManager::Zypper,
+            _ => PackageManager::Unknown,
+        };
+        while let Some(child) = command_rows.first_child() {
+            command_rows.remove(&child);
+        }
+        if missing.is_empty() {
+            command_rows.append(&setting_subtitle(
+                "Nothing to install. Recheck after changing installed programs.",
+            ));
+        } else if let Some(command) = manager.install_command(&missing) {
+            let install = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let entry = gtk::Entry::new();
+            entry.set_text(&command);
+            entry.set_editable(false);
+            entry.set_hexpand(true);
+            entry.add_css_class("rd-mono");
+            entry.set_tooltip_text(Some(&command));
+            let copy = gtk::Button::with_label("Copy command");
+            let weak = window_weak.clone();
+            copy.connect_clicked(move |button| {
+                if let Some(window) = weak.upgrade() {
+                    window.clipboard().set_text(&command);
+                    button.set_label("Copied");
+                }
+            });
+            install.append(&entry);
+            install.append(&copy);
+            command_rows.append(&install);
+            command_rows.append(&setting_subtitle("Review the packages, run the command in a terminal, then press Recheck. Nothing is installed automatically."));
+        } else {
+            command_rows.append(&setting_subtitle("No verified install command for this package manager. Use your distribution's package search for the missing programs."));
+        }
+    });
+    update(0);
+    manager_pick.connect_selected_notify(move |pick| update(pick.selected()));
+    let guide = gtk::LinkButton::with_label(
+        "https://github.com/ReyyIchiro/radialdeck/blob/main/docs/installing.md",
+        "Installation and converter setup guide",
+    );
+    guide.set_halign(gtk::Align::Start);
+    rows.append(&guide);
 }
 
 fn shortcut_line(title: &str, subtitle: &str, badge: &gtk::Label) -> gtk::Box {

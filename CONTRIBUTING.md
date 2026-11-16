@@ -23,6 +23,10 @@ cargo build
 - **Test:** `cargo test --all`; semua harus lulus.
 - **Komentar & identifier:** bahasa Inggris.
 - **Dokumentasi & komunikasi:** bahasa Indonesia boleh.
+- **Dokumen proyek:** README (ringkasan + status verifikasi), `docs/manual.md`
+  (referensi fitur lengkap untuk pengguna dan agen AI), `docs/architecture.md`
+  (batas modul), `docs/status.md` (kondisi terverifikasi). Perilaku baru wajib
+  memperbarui dokumen yang terdampak.
 
 ## Arsitektur Platform
 
@@ -66,4 +70,4 @@ Buka GitHub Issue dengan:
 ## Keamanan
 
 Jangan buka issue publik untuk kerentanan keamanan.
-Kirim ke email maintainer langsung.
+Gunakan [GitHub private vulnerability reporting](https://github.com/ReyyIchiro/radialdeck/security/advisories/new).
