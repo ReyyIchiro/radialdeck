@@ -39,29 +39,29 @@ optdepends=(
 )
 makedepends=('cargo' 'rust')
 # Deterministic source artifact produced by the release workflow
-# (git archive of the tag, root directory $pkgname-v$pkgver).
-source=("$url/releases/download/v$pkgver/$pkgname-v$pkgver-source.tar.gz")
+# (git archive of the tag, root directory radialdeck-$pkgver).
+source=("$url/releases/download/v$pkgver/radialdeck-$pkgver.tar.gz")
 sha256sums=({{SHA256}})
 
 prepare() {
-    cd "$pkgname-$pkgver"
+    cd "radialdeck-$pkgver"
     cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
-    cd "$pkgname-$pkgver"
+    cd "radialdeck-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     cargo build --frozen --release
 }
 
 check() {
-    cd "$pkgname-$pkgver"
+    cd "radialdeck-$pkgver"
     cargo test --frozen
 }
 
 package() {
-    cd "$pkgname-$pkgver"
+    cd "radialdeck-$pkgver"
 
     install -Dm755 "target/release/radial-deck" \
         "$pkgdir/usr/bin/radial-deck"

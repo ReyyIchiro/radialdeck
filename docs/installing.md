@@ -54,6 +54,30 @@ Semua konverter dipanggil sebagai proses terpisah tanpa shell; nama berkas dan p
 
 Aplikasi harus berjalan untuk memegang hotkey global. Aktifkan *Launch at login* di pengaturan aplikasi, atau pastikan berkas *autostart* ada. Jika masih tidak aktif, jalankan `./scripts/doctor.sh` atau periksa *Settings → Shortcuts → Change Shortcuts…* di KDE.
 
+
+## Menjadi maintainer AUR (sekali saja)
+
+Panduan untuk pemilik proyek. Hanya diperlukan saat pertama kali
+memublikasikan paket atau memindah kepemilikan.
+
+1. Buat akun di [aur.archlinux.org/register](https://aur.archlinux.org/register/)
+   (butuh email aktif untuk verifikasi).
+2. Buat SSH key khusus AUR:
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/aur -C "aur-$(whoami)"
+   ```
+3. Tempel isi `~/.ssh/aur.pub` ke profil AUR → *My Account → SSH Public Keys*.
+4. Tambahkan blok di `~/.ssh/config`:
+   ```
+   Host aur.archlinux.org
+     User aur
+     IdentityFile ~/.ssh/aur
+   ```
+5. Uji koneksi: `ssh aur@aur.archlinux.org help`.
+
+Setelah akun aktif, buat repositori paket lokal dan dorong `PKGBUILD` +
+`.SRCINFO` dari `packaging/aur/`. Rinciannya ada di `docs/releasing.md`.
+
 ## Hak cipta
 
 RadialDeck dilisensikan MIT. Lihat `LICENSE`.
