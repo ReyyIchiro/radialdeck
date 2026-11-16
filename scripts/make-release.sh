@@ -58,9 +58,12 @@ fi
 SHA="$(sha256sum "$TMP/$TARBALL" | awk '{print $1}')"
 echo "sha256($TARBALL) = $SHA"
 
-sed -e "s|{{PKGVER}}|${VERSION}|g" \
+sed -e "1,/^# Placeholders:/d" \
+    -e "s|{{PKGVER}}|${VERSION}|g" \
     -e "s|{{SHA256}}|${SHA}|g" \
-    "$TPL" > "$OUT/PKGBUILD"
+    "$TPL" | sed -e '1{/^$/d}' > "$OUT/PKGBUILD"
+
+sed -i "1s|^|# Maintainer: RadialDeck contributors\n# Contribute through the upstream repository:\n# https://github.com/ReyyIchiro/radialdeck\n# The publisher of the AUR package must replace the maintainer line with a\n# reachable contact address before pushing to the AUR.\n|" "$OUT/PKGBUILD"
 
 if command -v makepkg >/dev/null 2>&1; then
     echo "Regenerating .SRCINFO"

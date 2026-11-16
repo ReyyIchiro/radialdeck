@@ -10,8 +10,11 @@ packaging/aur/*.tar.gz
 .flatpak-builder/
 build-dir/
 packaging/flatpak/cargo-sources.json
+packaging/aur/PKGBUILD
+packaging/aur/.SRCINFO
 
 # Editors
+
 .idea/
 .vscode/
 *.swp
